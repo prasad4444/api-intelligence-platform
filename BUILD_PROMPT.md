@@ -29,3 +29,10 @@ Token discipline: reuse shared components, don't regenerate unchanged files, kee
 - Unit tests for all services (JUnit 5 + Mockito), integration tests for every REST controller (MockMvc/@SpringBootTest on H2), WireMock tests for the GitHub/Jira/AI clients, frontend component tests (Vitest + Testing Library), and Playwright end-to-end smoke tests covering login, each sidebar page, Swagger try-it, a Postman send, Excel upload, and the capacity matrix.
 - JaCoCo coverage of at least 80% on the backend, enforced in `mvn verify`; CI runs all suites.
 - The final report includes test counts, coverage, and screenshots of every page.
+
+## Friday (hellofriday.ai) integration
+- Add Friday as an AI/automation provider in Admin (daemon base URL, default `http://localhost:18080`, plus an optional workspace id).
+- In AI Copilot, list Friday spaces (`GET /api/workspaces`) and chat with a space (`POST /api/workspaces/{id}/chat`, streamed over SSE to the UI).
+- Add "Run Friday workflow" actions: trigger signals (`POST /api/workspaces/{id}/signals/{signalId}` with a payload, streamed over SSE), track them with `GET /api/sessions/{id}`, and cancel with `DELETE`. Wire these to approval events (spec approved, PR created, failed tests, sprint over capacity) so Friday can automate follow-ups.
+- Mock it with WireMock in tests. When Friday isn't running, hide or disable it gracefully.
+- Docs: https://docs.hellofriday.ai/guides/integrate-with-your-app
