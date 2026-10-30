@@ -18,3 +18,8 @@ Modules (sidebar, API/version selector, Ctrl+K, light/dark):
 
 Quality: modular packages, validation, springdoc, WebClient proxy with SSRF guard, tests (`mvn verify` green), Docker, GitHub Actions CI, README.
 Token discipline: reuse shared components, don't regenerate unchanged files, keep commits incremental.
+
+## Excel template import/export (Team Capacity + Stories)
+- "Download template" button gives an .xlsx (Apache POI) with sheets: Stories (Key, Summary, Priority, Status, Sprint, Dev Points, Test Points, Developer, Tester, Epic, Fix Version), Team (Name, Role, Region, Hours/Day, Allocation %), Sprints (Name, Start, End), Leaves (Name, From, To, Type), Holidays (Date, Region, Name). Include header styling, data validation dropdowns (Priority, Role, Region) and an Instructions sheet.
+- "Upload" validates rows (per-row error report), upserts into H2, and every screen (Dashboard, Capacity matrix, heatmap, sprint charts, story grid) reflects it immediately.
+- "Export" downloads the current data in the same format.
