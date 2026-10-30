@@ -36,3 +36,10 @@ Token discipline: reuse shared components, don't regenerate unchanged files, kee
 - Add "Run Friday workflow" actions: trigger signals (`POST /api/workspaces/{id}/signals/{signalId}` with a payload, streamed over SSE), track them with `GET /api/sessions/{id}`, and cancel with `DELETE`. Wire these to approval events (spec approved, PR created, failed tests, sprint over capacity) so Friday can automate follow-ups.
 - Mock it with WireMock in tests. When Friday isn't running, hide or disable it gracefully.
 - Docs: https://docs.hellofriday.ai/guides/integrate-with-your-app
+
+## Test case library (save and retrieve)
+- Generated and manual test cases are saved in H2 with an id, title, API/operation, type (positive/negative/boundary/security), priority, preconditions, steps, request, expected response/assertions, tags, linked Jira key, author and timestamps.
+- Test library UI: search and filter (API, operation, tag, type, priority, Jira key, status), view and edit, clone, bulk select, versions with history and diff, and restore.
+- Organize cases into test suites and test plans per sprint or release. Execution runs store results (pass/fail, response, duration) and show run history per case.
+- Re-generating a case keeps manual edits (merge/diff prompt). Cases can be retrieved via the REST API and imported/exported as Excel, CSV, JSON, Postman, JUnit and Cucumber.
+- Jira/Zephyr-style export to push cases to Jira as Test issues.
