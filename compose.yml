@@ -1,0 +1,17 @@
+services:
+  platform:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      VAULT_KEY: ${VAULT_KEY:?Set VAULT_KEY}
+      DEVELOPER_PASSWORD: ${DEVELOPER_PASSWORD:-}
+      REVIEWER_PASSWORD: ${REVIEWER_PASSWORD:-}
+      INTEGRATION_HOSTS: ${INTEGRATION_HOSTS:-api.github.com,api.devin.ai,api.openai.com,api.anthropic.com}
+      FRIDAY_URL: ${FRIDAY_URL:-http://localhost:18080}
+    volumes:
+      - platform-data:/app/data
+    restart: unless-stopped
+volumes:
+  platform-data:

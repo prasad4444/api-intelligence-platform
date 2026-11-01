@@ -1,0 +1,31 @@
+server:
+  address: ${BIND_ADDRESS:127.0.0.1}
+  port: ${PORT:8080}
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: strict
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:file:./data/platform;DB_CLOSE_ON_EXIT=FALSE}
+    username: sa
+    password: ${DATABASE_PASSWORD:}
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 5MB
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+  h2:
+    console:
+      enabled: false
+platform:
+  admin-password: ${ADMIN_PASSWORD:}
+  developer-password: ${DEVELOPER_PASSWORD:}
+  reviewer-password: ${REVIEWER_PASSWORD:}
+  vault-key: ${VAULT_KEY:}
+  seed: ${SEED_DEMO:true}
+  friday-url: ${FRIDAY_URL:http://localhost:18080}
+  integration-hosts: ${INTEGRATION_HOSTS:api.github.com}
