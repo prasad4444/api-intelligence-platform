@@ -48,6 +48,52 @@ class PlatformIntegrationTest {
       .andExpect(status().isBadRequest());
   }
 
+  @Test
+  @org.springframework.transaction.annotation.Transactional
+  void uploadedContractCreatesLinkedPackageAndRegeneratesAfterChanges() throws Exception {
+    var contract = specs.parse("openapi: 3.0.3\ninfo:\n  title: Uploaded package API\n  version: '1'\npaths:\n  /widgets:\n    get:\n      operationId: widgets\n      responses:\n        '200':\n          description: OK\n");
+    var record = store.parse("{}");record.put("name","Uploaded package API");record.put("version","1");record.put("status","DRAFT");record.set("document",contract);
+    var saved=store.save("specs",record,"admin");String id=saved.path("id").asText();int before=store.list("runs").size();
+    var result=mvc.perform(post("/api/tests/generate/"+id+"/package").with(csrf())).andExpect(status().isOk()).andReturn();
+    var bundle=json.readTree(result.getResponse().getContentAsString());assertEquals(4,bundle.path("cases").size());assertEquals(4,bundle.path("suites").size());assertEquals(4,bundle.path("plan").path("caseIds").size());assertEquals(before,store.list("runs").size());
+    String first=bundle.path("cases").get(0).path("id").asText();
+    var repeated=mvc.perform(post("/api/tests/generate/"+id+"/package").with(csrf())).andExpect(status().isOk()).andReturn();assertEquals(first,json.readTree(repeated.getResponse().getContentAsString()).path("cases").get(0).path("id").asText());
+    ((ObjectNode)saved.path("document").path("paths").path("/widgets").path("get")).put("summary","Updated operation");store.save("specs",saved,"admin");
+    var changed=mvc.perform(post("/api/tests/generate/"+id+"/package").with(csrf())).andExpect(status().isOk()).andReturn();assertNotEquals(first,json.readTree(changed.getResponse().getContentAsString()).path("cases").get(0).path("id").asText());
+  }
+
+  @Autowired
+  com.apiintel.environments.EnvironmentService environments;
+
+  @Test
+  @org.springframework.transaction.annotation.Transactional
+  void encryptedEnvironmentMasksSecretsAndResolvesOnlyAllowedDestinations() throws Exception {
+    var input=store.parse("{\"name\":\"Secure Dev\",\"scope\":\"environment\",\"allowedHosts\":[\"example.com\"],\"values\":[{\"key\":\"baseUrl\",\"value\":\"https://example.com\",\"enabled\":true},{\"key\":\"bearerToken\",\"value\":\"private-demo-token\",\"secret\":true,\"enabled\":true}]}");
+    var saved=environments.save(input,"admin");String id=saved.path("id").asText();assertEquals("",saved.path("values").get(1).path("value").asText());assertTrue(saved.path("values").get(1).path("hasValue").asBoolean());assertFalse(store.get("environments",id).toString().contains("private-demo-token"));
+    var req=store.parse("{\"method\":\"GET\",\"url\":\"https://example.com/orders\",\"headers\":{\"Authorization\":\"Bearer {{bearerToken}}\"}}");req.put("environmentId",id);
+    var resolved=environments.resolve(req);assertEquals("Bearer private-demo-token",resolved.request().path("headers").path("Authorization").asText());assertTrue(resolved.secrets().contains("private-demo-token"));
+    var rotated=environments.save(saved,"admin");assertEquals("Bearer private-demo-token",environments.resolve(req).request().path("headers").path("Authorization").asText());
+    req.put("url","https://other.example/orders");assertThrows(IllegalArgumentException.class,()->environments.resolve(req));
+    req.put("url","https://example.com/orders?token={{bearerToken}}");assertTrue(environments.resolve(req).request().path("url").asText().contains("private-demo-token"));
+    mvc.perform(get("/api/environments")).andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private-demo-token"))));
+    mvc.perform(post("/api/records/environments").with(csrf()).contentType("application/json").content(input.toString())).andExpect(status().isBadRequest());
+    environments.delete(id,"admin");assertTrue(store.list("environments").stream().noneMatch(e->e.path("id").asText().equals(id)));
+  }
+
+  @Test
+  @org.springframework.transaction.annotation.Transactional
+  void environmentScopesAndEncodingAreDeterministic() throws Exception {
+    var global=store.parse("{\"name\":\"Global vars\",\"scope\":\"global\",\"allowedHosts\":[\"example.com\"],\"values\":[{\"key\":\"token\",\"value\":\"global\",\"secret\":true}]}");
+    var g=environments.save(global,"admin");
+    var env=store.parse("{\"name\":\"Environment vars\",\"allowedHosts\":[\"example.com\"],\"values\":[{\"key\":\"token\",\"value\":\"a&b c\",\"secret\":true},{\"key\":\"alias\",\"value\":\"{{token}}\"}]}");
+    var e=environments.save(env,"admin");
+    var request=store.parse("{\"method\":\"POST\",\"url\":\"https://example.com/?key={{token}}\",\"headers\":{\"Content-Type\":\"application/x-www-form-urlencoded\"},\"body\":\"token=%7B%7Balias%7D%7D\"}");request.put("globalProfileId",g.path("id").asText());request.put("environmentId",e.path("id").asText());
+    var resolved=environments.resolve(request).request();assertTrue(resolved.path("url").asText().contains("a%26b%20c"));assertEquals("token=a%26b%20c",resolved.path("body").asText());
+    assertThrows(IllegalArgumentException.class,()->environments.save(global,"admin"));
+    request.put("globalProfileId",e.path("id").asText());assertThrows(IllegalArgumentException.class,()->environments.resolve(request));
+    var invalid=env.deepCopy();invalid.putArray("allowedHosts").add("*.example.com");assertThrows(IllegalArgumentException.class,()->environments.save(invalid,"admin"));
+  }
+
   @Autowired
   MockMvc mvc;
 

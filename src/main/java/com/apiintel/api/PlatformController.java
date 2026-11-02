@@ -49,7 +49,7 @@ public class PlatformController {
     Principal p
   ) {
     if (
-      Set.of("integrations", "rules", "events", "governance-runs").contains(
+      Set.of("environments", "integrations", "rules", "events", "governance-runs").contains(
         kind
       )
     ) throw new IllegalArgumentException(
@@ -72,6 +72,7 @@ public class PlatformController {
     @PathVariable String id,
     Principal p
   ) {
+    if (kind.equals("environments")) throw new IllegalArgumentException("Use the environments endpoint");
     store.delete(kind, id, p.getName());
   }
 

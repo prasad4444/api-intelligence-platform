@@ -21,6 +21,9 @@ public class TestService {
   public List<ObjectNode> generate(String specId, String actor) {
     var spec = store.get("specs", specId);
     var generated = new ArrayList<ObjectNode>();
+    String contractHash;
+    try { contractHash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(spec.path("document").toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+    catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     spec
       .path("document")
       .path("paths")
@@ -31,7 +34,7 @@ public class TestService {
           .fields()
           .forEachRemaining(o -> {
             if (
-              !Set.of("get", "post", "put", "patch", "delete").contains(
+              !Set.of("get", "post", "put", "patch", "delete", "head", "options").contains(
                 o.getKey()
               )
             ) return;
@@ -42,7 +45,7 @@ public class TestService {
               "security"
             )) {
               String operation = o.getKey().toUpperCase() + " " + p.getKey();
-              String fingerprint = specId + ":" + operation + ":" + type;
+              String fingerprint = specId + ":" + contractHash + ":" + operation + ":" + type;
               var existing = store
                 .list("tests")
                 .stream()
@@ -56,6 +59,8 @@ public class TestService {
               t.put("fingerprint", fingerprint);
               t.put("title", type + " · " + operation);
               t.put("specId", specId);
+              t.put("specRevision", spec.path("revision").asInt());
+              t.put("contractHash", contractHash);
               t.put("operation", operation);
               t.put("type", type);
               t.put("priority", type.equals("security") ? "High" : "Medium");
@@ -127,9 +132,19 @@ public class TestService {
     ) throw new IllegalArgumentException(
       "Set an expected HTTP status between 100 and 599 before running"
     );
+    var headers = req.path("headers");
+    if (headers.isObject()) headers.fields().forEachRemaining(h -> {
+      String value = h.getValue().asText();
+      for (var v : env.entrySet()) value = value.replace("{{" + v.getKey() + "}}", v.getValue());
+      ((ObjectNode) headers).put(h.getKey(), value);
+    });
+    for (String key : List.of("environmentId", "globalProfileId", "collectionProfileId", "collectionId")) if (env.containsKey(key)) req.put(key,env.get(key));
+    if (!req.has("environmentId") && !req.has("globalProfileId") && req.toString().matches("(?s).*\\{\\{[^}]+\\}\\}.*")) throw new IllegalArgumentException("Resolve all request variables before execution");
     var response = requests.send(req, actor);
     var run = store.parse("{}");
     run.put("caseId", id);
+    run.put("specId", t.path("specId").asText());
+    run.put("specRevision", t.path("specRevision").asInt());
     run.put("caseRevision", t.path("revision").asInt());
     run.put(
       "status",

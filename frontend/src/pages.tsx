@@ -1,3 +1,4 @@
+import TestGeneration from "./TestGeneration";
 import { exportDrawio, importDrawio } from "./drawio";
 import { parseCurl, snippet as makeSnippet, safeRegex } from "./request-tools";
 import { useState, useEffect, useRef } from "react";
@@ -264,363 +265,35 @@ export function Workspace({ data, spec, run, selectSpec }: PageProps) {
     </>
   );
 }
-export function Client({ data, run, edit }: PageProps) {
-  const [method, setMethod] = useState("GET"),
-    [url, setUrl] = useState("{{baseUrl}}/get"),
-    [body, setBody] = useState(""),
-    [bodyType, setBodyType] = useState("JSON"),
-    [headers, setHeaders] = useState("{}"),
-    [env, setEnv] = useState('{"baseUrl":"https://httpbin.org"}'),
-    [response, setResponse] = useState<Row | null>(null),
-    [auth, setAuth] = useState("None"),
-    [token, setToken] = useState(""),
-    [collectionId, setCollectionId] = useState(""),
-    [snippet, setSnippet] = useState("");
-  const collection =
-    (data.collections || []).find((c) => c.id === collectionId) ||
-    (data.collections || [])[0];
-  function makeRequest(r?: Row) {
-    const vars = JSON.parse(env);
-    let h: Row = JSON.parse(headers);
-    if (Array.isArray(r?.header))
-      for (const header of r.header)
-        if (!header.disabled)
-          h[header.key] = interpolate(String(header.value), vars);
-    if (bodyType === "JSON") h["Content-Type"] = "application/json";
-    if (bodyType === "Form")
-      h["Content-Type"] = "application/x-www-form-urlencoded";
-    if (bodyType === "XML") h["Content-Type"] = "application/xml";
-    if (auth === "Bearer") h.Authorization = "Bearer " + token;
-    if (auth === "Basic") h.Authorization = "Basic " + btoa(token);
-    if (auth === "API Key") h["X-API-Key"] = token;
-    return {
-      method: r?.method || method,
-      url: interpolate(
-        typeof r?.url === "object" ? r.url.raw : r?.url || url,
-        vars,
-      ),
-      body: interpolate(r?.body?.raw ?? body, vars),
-      headers: h,
-    };
-  }
-  return (
-    <div className="studio-layout">
-      <Panel
-        title="Collections"
-        action={
-          <button
-            onClick={() =>
-              edit("collections", {
-                name: "New collection",
-                info: {
-                  name: "New collection",
-                  schema:
-                    "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-                },
-                item: [],
-              })
-            }
-          >
-            <Plus size={15} />
-          </button>
-        }
-      >
-        <select
-          aria-label="Collection"
-          value={collection?.id || ""}
-          onChange={(e) => setCollectionId(e.target.value)}
-        >
-          {(data.collections || []).map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        {flatten(collection?.item || []).map((i, n) => (
-          <button
-            className="request-item"
-            key={n}
-            onClick={() => {
-              setMethod(i.request.method);
-              setUrl(
-                typeof i.request.url === "string"
-                  ? i.request.url
-                  : i.request.url.raw,
-              );
-              setBody(i.request.body?.raw || "");
-            }}
-          >
-            <Badge tone="green">{i.request.method}</Badge>
-            {i.name}
-          </button>
-        ))}
-        <div className="toolbar">
-          <button
-            disabled={!collection}
-            onClick={() => collection && edit("collections", collection)}
-          >
-            Edit
-          </button>
-          <button
-            disabled={!collection}
-            onClick={() => download("collection.json", pretty(collection))}
-          >
-            <Download size={14} /> v2.1
-          </button>
-          <label className="button">
-            <Upload size={14} /> Import
-            <input
-              hidden
-              type="file"
-              accept=".json"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f)
-                  run(async () => {
-                    const c = JSON.parse(await f.text());
-                    if (
-                      !c.info?.schema?.includes("v2.1.0") ||
-                      !Array.isArray(c.item)
-                    )
-                      throw new Error("Postman v2.1 collection required");
-                    delete c.id;
-                    delete c.revision;
-                    return save("collections", { ...c, name: c.info.name });
-                  });
-              }}
-            />
-          </label>
-        </div>
-        <button
-          onClick={() =>
-            run(async () => {
-              const results = [];
-              for (const i of flatten(collection?.item || [])) {
-                const res = await post("/client/send", makeRequest(i.request));
-                results.push({ name: i.name, ...res });
-              }
-              setResponse({ runner: results });
-            })
-          }
-        >
-          <Play size={14} /> Run collection
-        </button>
-        <h4 className="section-label">REQUEST HISTORY</h4>
-        {(data.history || []).slice(0, 8).map((h) => (
-          <button
-            key={h.id}
-            className="history-item"
-            onClick={() => {
-              setMethod(h.method);
-              setUrl(h.url);
-            }}
-          >
-            <Badge>{h.status}</Badge>
-            <span>
-              {h.method} {h.url}
-            </span>
-          </button>
-        ))}
-      </Panel>
-      <div>
-        <Panel>
-          <div className="request-bar">
-            <select
-              aria-label="HTTP method"
-              value={method}
-              onChange={(e) => setMethod(e.target.value)}
-            >
-              {["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"].map(
-                (m) => (
-                  <option key={m}>{m}</option>
-                ),
-              )}
-            </select>
-            <input
-              aria-label="Request URL"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-            />
-            <button
-              className="primary"
-              onClick={() =>
-                run(async () =>
-                  setResponse(await post("/client/send", makeRequest())),
-                )
-              }
-            >
-              <Send size={16} /> Send
-            </button>
-          </div>
-          <div className="two-cols compact">
-            <Field label="Authentication">
-              <select value={auth} onChange={(e) => setAuth(e.target.value)}>
-                {["None", "Bearer", "Basic", "API Key"].map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Ephemeral credential (not saved)">
-              <input
-                type="password"
-                value={token}
-                placeholder="For saved credentials use Integration Hub"
-                onChange={(e) => setToken(e.target.value)}
-              />
-            </Field>
-          </div>
-          <div className="two-cols compact">
-            <Field label="Headers (JSON)">
-              <textarea
-                className="code"
-                value={headers}
-                onChange={(e) => setHeaders(e.target.value)}
-              />
-            </Field>
-            <Field label="Environment variables (JSON)">
-              <textarea
-                className="code"
-                value={env}
-                onChange={(e) => setEnv(e.target.value)}
-              />
-            </Field>
-          </div>
-          <Field label="Body format">
-            <select
-              value={bodyType}
-              onChange={(e) => setBodyType(e.target.value)}
-            >
-              {["JSON", "Text", "XML", "Form"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </Field>
-          <textarea
-            aria-label="Request body"
-            className="code"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-          />
-          <div className="toolbar">
-            <button
-              onClick={() => {
-                try {
-                  const r = makeRequest();
-                  setSnippet(makeSnippet(r, "curl"));
-                } catch (e) {
-                  setSnippet(String(e));
-                }
-              }}
-            >
-              Generate curl
-            </button>
-            <button
-              onClick={() => {
-                try {
-                  setSnippet(makeSnippet(makeRequest(), "fetch"));
-                } catch (e) {
-                  setSnippet(String(e));
-                }
-              }}
-            >
-              fetch snippet
-            </button>
-            <button
-              onClick={() => {
-                try {
-                  setSnippet(makeSnippet(makeRequest(), "java"));
-                } catch (e) {
-                  setSnippet(String(e));
-                }
-              }}
-            >
-              Java snippet
-            </button>
-            <button
-              onClick={() => {
-                try {
-                  const text = prompt("Paste curl command");
-                  if (text) {
-                    const parsed = parseCurl(text);
-                    setMethod(parsed.method);
-                    setUrl(parsed.url);
-                    setHeaders(pretty(parsed.headers));
-                    setBody(parsed.body);
-                  }
-                } catch (e) {
-                  setSnippet(String(e));
-                }
-              }}
-            >
-              Import curl
-            </button>
-            <button
-              onClick={() =>
-                collection &&
-                run(() =>
-                  save("collections", {
-                    ...collection,
-                    item: [
-                      ...collection.item,
-                      {
-                        name: method + " " + url,
-                        request: {
-                          method,
-                          url,
-                          header: [],
-                          body: { mode: "raw", raw: body },
-                        },
-                      },
-                    ],
-                  }),
-                )
-              }
-            >
-              Save to collection
-            </button>
-          </div>
-          {snippet && <JsonView value={snippet} />}
-        </Panel>
-        <Panel
-          title="Response"
-          action={
-            response && (
-              <Badge
-                tone={
-                  response.status >= 200 && response.status < 300
-                    ? "green"
-                    : "neutral"
-                }
-              >
-                {response.status || "Runner"} · {response.durationMs || 0} ms
-              </Badge>
-            )
-          }
-        >
-          {response ? (
-            <JsonView value={response} />
-          ) : (
-            <Empty text="Send a request to inspect the response, headers and timing." />
-          )}
-        </Panel>
-      </div>
-    </div>
-  );
-}
-export function TestLibrary({ data, spec, run, edit }: PageProps) {
+export { default as Client } from "./RequestStudio";
+export function TestLibrary({ data, spec, run, edit, reload }: PageProps) {
   const [search, setSearch] = useState(""),
     [type, setType] = useState(""),
     [result, setResult] = useState<unknown>(null),
     [selected, setSelected] = useState<string[]>([]),
     [base, setBase] = useState("https://httpbin.org"),
+    [executionVariables, setExecutionVariables] = useState("{}"),
+    [testEnvironmentId, setTestEnvironmentId] = useState(""),
     [tab, setTab] = useState("Cases");
-  const rows = (data.tests || []).filter(
+  useEffect(() => { setSelected([]); setResult(null); }, [spec?.id]);
+  const scoped = (kind: string) => (data[kind] || []).filter(row => row.specId === spec?.id || (!row.specId && (row.caseIds || []).some((id: string) => data.tests?.some(t => t.id === id && t.specId === spec?.id))));
+  useEffect(()=>{const environment=data.environments?.find(e=>e.id===testEnvironmentId);const value=environment?.values?.find((v:Row)=>v.key==="baseUrl"&&v.enabled!==false&&!v.secret)?.value;if(value)setBase(value);},[testEnvironmentId,data.environments]);
+  function executionEnv() {
+    const extra = JSON.parse(executionVariables);
+    if (!extra || typeof extra !== "object" || Array.isArray(extra) || Object.values(extra).some(v=>typeof v!=="string")) throw new Error("Execution variables must be a JSON object of string values");
+    const global=data.environments?.find(e=>e.scope==="global");
+    return {...extra,baseUrl:base,...(testEnvironmentId?{environmentId:testEnvironmentId}:{}),...(global?{globalProfileId:global.id}:{})};
+  }
+  const visibleIds = new Set(scoped("tests").map(t => t.id));
+  const selectedIds = selected.filter(id => visibleIds.has(id));
+  const rows = scoped("tests").filter(
     (t) =>
       (!type || t.type === type) &&
       pretty(t).toLowerCase().includes(search.toLowerCase()),
   );
   return (
     <>
+      <TestGeneration data={data} spec={spec} reload={reload}/>
       <div className="toolbar spread">
         <div className="tabs">
           {["Cases", "Suites", "Plans", "Runs"].map((t) => (
@@ -638,6 +311,8 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
             onClick={() =>
               edit("tests", {
                 title: "Manual test",
+                specId: spec?.id,
+                specRevision: spec?.revision,
                 type: "positive",
                 priority: "Medium",
                 status: "Draft",
@@ -668,6 +343,8 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
       </div>
       {tab === "Cases" ? (
         <Panel>
+          <Field label="Saved execution environment"><select aria-label="Test execution environment" value={testEnvironmentId} onChange={e=>setTestEnvironmentId(e.target.value)}><option value="">Session variables only</option>{(data.environments||[]).filter(e=>e.scope==="environment").map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select></Field>
+          <Field label="Execution variables (session only, JSON)"><input aria-label="Execution variables" type="password" value={executionVariables} onChange={e=>setExecutionVariables(e.target.value)} placeholder='{"bearerToken":"..."}' autoComplete="off"/></Field>
           <div className="toolbar">
             <input
               aria-label="Search test cases"
@@ -690,15 +367,15 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
               onClick={() =>
                 run(async () => {
                   const results = [];
-                  for (const id of selected)
+                  for (const id of selectedIds)
                     results.push(
-                      await post("/tests/" + id + "/run", { baseUrl: base }),
+                      await post("/tests/" + id + "/run", executionEnv()),
                     );
                   setResult(results);
                 })
               }
             >
-              Run selected ({selected.length})
+              Run selected ({selectedIds.length})
             </button>
           </div>
           <p className="muted">
@@ -708,7 +385,7 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
           </p>
           <Records
             rows={rows}
-            columns={["title", "type", "priority", "status", "linkedJiraKey"]}
+            columns={["title", "type", "priority", "status", "specRevision", "linkedJiraKey"]}
             onEdit={(r) => edit("tests", r)}
             actions={(r) => (
               <>
@@ -728,9 +405,7 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
                   onClick={() =>
                     run(async () =>
                       setResult(
-                        await post("/tests/" + r.id + "/run", {
-                          baseUrl: base,
-                        }),
+                        await post("/tests/" + r.id + "/run", executionEnv()),
                       ),
                     )
                   }
@@ -825,7 +500,7 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
                       for (const c of cases) {
                         delete c.id;
                         delete c.revision;
-                        await save("tests", c);
+                        await save("tests", { ...c, specId: spec?.id, specRevision: spec?.revision });
                       }
                     });
                 }}
@@ -836,7 +511,7 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
       ) : tab === "Runs" ? (
         <Panel title="Execution history">
           <Records
-            rows={data.runs || []}
+            rows={(data.runs || []).filter(r => r.specId === spec?.id || visibleIds.has(r.caseId))}
             columns={["caseId", "caseRevision", "status", "updatedAt"]}
             actions={(r) => (
               <button onClick={() => setResult(r)}>Details</button>
@@ -846,7 +521,7 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
       ) : (
         <Panel title={tab}>
           <Records
-            rows={data[tab.toLowerCase()] || []}
+            rows={scoped(tab.toLowerCase())}
             columns={["name", "sprint", "caseIds"]}
             actions={(r) => (
               <button
@@ -859,7 +534,7 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
                           "/" +
                           r.id +
                           "/run",
-                        { baseUrl: base },
+                        executionEnv(),
                       ),
                     ),
                   )
@@ -873,7 +548,9 @@ export function TestLibrary({ data, spec, run, edit }: PageProps) {
               edit(tab.toLowerCase(), {
                 name: "New " + tab.slice(0, -1),
                 sprint: "",
-                caseIds: selected,
+                caseIds: selectedIds,
+                specId: spec?.id,
+                specRevision: spec?.revision,
               })
             }
           />
@@ -2587,6 +2264,19 @@ function ConnectorEditor({
             </>
           )}
         </div>
+        <Panel title="AI test generation">
+          <label><input type="checkbox" checked={!!config.testGenerationEnabled} onChange={e => set("testGenerationEnabled",e.target.checked)}/> Allow this connection to generate test drafts</label>
+          {config.testGenerationEnabled && <>
+            <Field label="Test generation protocol"><select value={config.testGenerationProtocol || (["openai","azure","anthropic","ollama"].includes(config.provider) ? config.provider : "custom-json")} onChange={e=>set("testGenerationProtocol",e.target.value)}>
+              <option value="openai">OpenAI-compatible JSON API</option><option value="azure">Azure OpenAI-compatible API</option><option value="anthropic">Anthropic Messages</option><option value="ollama">Ollama JSON API</option><option value="custom-json">Approved enterprise JSON gateway</option>
+            </select></Field>
+            <Field label="Generation endpoint path"><input value={config.chatPath || ""} placeholder="/approved/chat/endpoint" onChange={e=>set("chatPath",e.target.value)}/></Field>
+            <Field label="Generation model / deployment"><input value={config.model || ""} onChange={e=>set("model",e.target.value)}/></Field>
+            <Field label="Prompt JSON field (enterprise gateway)"><input value={config.testPromptField || "prompt"} onChange={e=>set("testPromptField",e.target.value)}/></Field>
+            <Field label="Response JSON pointer (optional)"><input value={config.testResponsePointer || ""} placeholder="/result/text" onChange={e=>set("testResponsePointer",e.target.value)}/></Field>
+            <p className="muted">Friday, Stylus and Microsoft services require an approved API or gateway with matching request/response schemas. This does not automate their chat website. Private network restrictions still apply.</p>
+          </>}
+        </Panel>
         <Field label="Allowed workspace roles">
           <div className="toolbar">
             {["ADMIN", "REVIEWER", "DEVELOPER", "TESTER"].map((role) => (
