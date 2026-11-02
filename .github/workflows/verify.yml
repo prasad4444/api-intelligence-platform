@@ -1,0 +1,47 @@
+name: Verify platform
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Backend tests, coverage gate and bundled production build
+        run: mvn -B verify
+      - name: Frontend component tests
+        run: npm test
+        working-directory: frontend
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Browser flows and every-page screenshots
+        run: npm run e2e
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-evidence
+          path: |
+            target/site/jacoco
+            target/surefire-reports
+            frontend/playwright-report
+            frontend/test-results
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-jar
+          path: target/api-intelligence-platform-*.jar
