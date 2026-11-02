@@ -75,6 +75,7 @@ export type PageProps = {
   edit: (kind: string, row: Row) => void;
   spec: Row | undefined;
   setPage: (s: string) => void;
+  selectSpec?: (id: string) => void;
 };
 export default function App() {
   const [user, setUser] = useState<Row | null>(null),
@@ -168,6 +169,7 @@ export default function App() {
     edit: (kind, row) => setEditor({ kind, row }),
     spec,
     setPage,
+    selectSpec: setSpecId,
   };
   return (
     <div className="app">

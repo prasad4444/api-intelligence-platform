@@ -40,6 +40,14 @@ import org.springframework.test.web.servlet.MockMvc;
 )
 class PlatformIntegrationTest {
 
+  @Test
+  void rejectsSpecRecordWithoutDocument() throws Exception {
+    mvc.perform(post("/api/records/specs").with(csrf())
+      .contentType("application/json")
+      .content("{\"name\":\"Broken\",\"status\":\"DRAFT\",\"paths\":{}}"))
+      .andExpect(status().isBadRequest());
+  }
+
   @Autowired
   MockMvc mvc;
 

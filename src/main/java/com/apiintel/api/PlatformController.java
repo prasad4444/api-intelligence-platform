@@ -14,9 +14,11 @@ import org.springframework.web.bind.annotation.*;
 public class PlatformController {
 
   private final RecordStore store;
+  private final com.apiintel.workspace.SpecService specs;
 
-  public PlatformController(RecordStore store) {
+  public PlatformController(RecordStore store, com.apiintel.workspace.SpecService specs) {
     this.store = store;
+    this.specs = specs;
   }
 
   @GetMapping("/csrf")
@@ -54,6 +56,7 @@ public class PlatformController {
       "Use the dedicated settings endpoints"
     );
     if (kind.equals("specs")) {
+      specs.parse(data.path("document").toString());
       var status = data.path("status").asText("DRAFT");
       if (!status.equals("DRAFT")) throw new IllegalArgumentException(
         "Editing a spec requires DRAFT status; approval must be requested again"

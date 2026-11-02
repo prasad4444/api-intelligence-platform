@@ -52,23 +52,35 @@ paths:
         '200':
           description: Success
 `;
-export function Workspace({ data, spec, run, edit }: PageProps) {
+export function Workspace({ data, spec, run, selectSpec }: PageProps) {
   const [source, setSource] = useState(initialSpec),
     [result, setResult] = useState<unknown>(null),
     [compare, setCompare] = useState(""),
     [url, setUrl] = useState("https://httpbin.org/get");
+  useEffect(() => {
+    setSource(spec?.document ? yaml.dump(spec.document) : initialSpec);
+  }, [spec?.id, spec?.revision]);
+  let preview: Row | undefined;
+  let sourceError = "";
+  try {
+    const parsed = yaml.load(source) as Row;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+        !String(parsed.openapi || "").startsWith("3.") ||
+        !parsed.paths || typeof parsed.paths !== "object" || Array.isArray(parsed.paths))
+      throw new Error("An OpenAPI 3 document with a paths object is required.");
+    preview = parsed;
+  } catch (e) {
+    sourceError = String(e);
+  }
   const operations: Row[] = [];
-  if (spec)
-    Object.entries(spec.document.paths || {}).forEach(([path, methods]) =>
-      Object.entries(methods as Row).forEach(([method, op]) => {
-        if (
-          ["get", "post", "put", "patch", "delete", "head", "options"].includes(
-            method,
-          )
-        )
-          operations.push({ path, method: method.toUpperCase(), ...op });
-      }),
-    );
+  Object.entries(preview?.paths || {}).forEach(([path, methods]) => {
+    if (!methods || typeof methods !== "object" || Array.isArray(methods)) return;
+    Object.entries(methods as Row).forEach(([method, op]) => {
+      if (["get", "post", "put", "patch", "delete", "head", "options", "trace"].includes(method) &&
+          op && typeof op === "object" && !Array.isArray(op))
+        operations.push({ ...op, path, method: method.toUpperCase() });
+    });
+  });
   return (
     <>
       <div className="two-cols">
@@ -78,11 +90,13 @@ export function Workspace({ data, spec, run, edit }: PageProps) {
         >
           <Field label="OpenAPI JSON or YAML">
             <textarea
+              aria-label="OpenAPI source"
               className="code tall"
               value={source}
               onChange={(e) => setSource(e.target.value)}
             />
           </Field>
+          {sourceError && <p role="alert" className="error">{sourceError}</p>}
           <div className="toolbar">
             <label className="button">
               <Upload size={15} /> Open file
@@ -107,25 +121,39 @@ export function Workspace({ data, spec, run, edit }: PageProps) {
             </button>
             <button
               className="primary"
-              onClick={() => run(() => post("/workspace/import", { source }))}
+              disabled={!preview}
+              onClick={() => run(async () => {
+                const saved = await post("/workspace/import", { source });
+                selectSpec?.(saved.id);
+                return saved;
+              })}
             >
               Import contract
             </button>
-            <button onClick={() => spec && setSource(pretty(spec.document))}>
+            <button disabled={!preview || !spec}
+              onClick={() => run(async () => {
+                const saved = await save("specs", {
+                  ...spec, document: preview, name: preview?.info?.title || "API",
+                  version: preview?.info?.version || "1.0", status: "DRAFT",
+                });
+                selectSpec?.(saved.id);
+                return saved;
+              })}>Save selected contract</button>
+            <button onClick={() => spec && setSource(yaml.dump(spec.document || {}))}>
               Load selected
             </button>
           </div>
         </Panel>
-        <Panel title="Selected API">
-          <h2>{spec?.name || "Import an API"}</h2>
+        <Panel title="Endpoint preview">
+          <h2>{preview?.info?.title || "Enter a valid API contract"}</h2>
           <p className="muted">
-            Version {spec?.version} · {operations.length} operations
+            Version {preview?.info?.version || "—"} · {operations.length} operations
           </p>
           <div className="toolbar">
             <button
               disabled={!spec}
               onClick={() =>
-                spec && edit("specs", { ...spec, status: "DRAFT" })
+                spec && setSource(yaml.dump(spec.document || {}))
               }
             >
               Edit as draft
@@ -170,7 +198,7 @@ export function Workspace({ data, spec, run, edit }: PageProps) {
               <button
                 onClick={() =>
                   setUrl(
-                    (spec?.document.servers?.[0]?.url ||
+                    (preview?.servers?.[0]?.url ||
                       "https://httpbin.org") + o.path,
                   )
                 }
@@ -1335,7 +1363,7 @@ export function Architecture({ data, spec, run, edit }: PageProps) {
             </button>
             <button
               onClick={() => {
-                const paths = Object.keys(spec?.document.paths || {});
+                const paths = Object.keys(spec?.document?.paths || {});
                 setSource(
                   "flowchart TD\n Client --> API" +
                     paths
