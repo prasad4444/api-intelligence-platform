@@ -25,6 +25,8 @@ public class IntegrationService {
 
   public record PullRequestCreated(ObjectNode payload, String actor) {}
 
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private WindowsAuthTransport windows;
   private final RecordStore store;
   private final Vault vault;
   private final NetworkGuard guard;
@@ -79,7 +81,7 @@ public class IntegrationService {
   public ObjectNode save(ObjectNode c, String actor) {
     String type = c.path("authType").asText("NONE");
     if (
-      !Set.of("NONE", "BEARER", "BASIC", "API_KEY", "OAUTH2_CLIENT").contains(
+      !Set.of("NONE", "BEARER", "BASIC", "API_KEY", "OAUTH2_CLIENT", "WINDOWS").contains(
         type
       )
     ) throw new IllegalArgumentException("Unsupported authentication type");
@@ -114,7 +116,10 @@ public class IntegrationService {
       if (!hosts.contains(root.getHost())) throw new IllegalArgumentException(
         "Host must be enabled by INTEGRATION_HOSTS on the server"
       );
-      guard.validate(base);
+      if(c.path("authType").asText().equals("WINDOWS")) {
+        if(windows==null)throw new IllegalArgumentException("Windows authentication transport is unavailable");
+        windows.validate(c,root);
+      } else guard.validate(base);
     } else if (
       !Set.of("http", "https").contains(root.getScheme())
     ) throw new IllegalArgumentException("Invalid Friday scheme");
@@ -216,6 +221,10 @@ public class IntegrationService {
     );
     var uri = target(c, path);
     store.audit(actor, "integration:" + method, c.path("id").asText());
+    if(c.path("authType").asText().equals("WINDOWS")) {
+      if(windows==null)throw new IllegalArgumentException("Windows authentication transport is unavailable");
+      return windows.call(c,uri,method,payload);
+    }
     try {
       var request = client(c)
         .method(HttpMethod.valueOf(method))
@@ -255,7 +264,13 @@ public class IntegrationService {
     }
   }
 
+  public Map<String,Object> checkWindows(String id) {
+    var c=config(id);if(!c.path("authType").asText().equals("WINDOWS"))throw new IllegalArgumentException("Select Windows authentication for this connection first");
+    target(c,"");if(windows==null)throw new IllegalArgumentException("Windows authentication transport is unavailable");return windows.check(c);
+  }
+
   public Flux<String> stream(ObjectNode c, String path, JsonNode payload) {
+    if(c.path("authType").asText().equals("WINDOWS"))throw new IllegalArgumentException("Streaming is not supported with Windows authentication; use a JSON request or an approved API token gateway");
     target(c, path);
     if (!c.path("enabled").asBoolean()) throw new IllegalArgumentException(
       "Connection is disabled"

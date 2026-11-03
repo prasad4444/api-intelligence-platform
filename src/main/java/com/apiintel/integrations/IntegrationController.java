@@ -30,6 +30,10 @@ public class IntegrationController {
     return service.save(data, p.getName());
   }
 
+  @PostMapping("/{id}/windows/check")
+  @PreAuthorize("hasRole('ADMIN')")
+  public Object checkWindows(@PathVariable String id){service.authorize(id);return service.checkWindows(id);}
+
   @GetMapping("/secrets")
   @PreAuthorize("hasRole('ADMIN')")
   public Object secrets() {

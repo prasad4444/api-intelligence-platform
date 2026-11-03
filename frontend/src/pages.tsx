@@ -2116,7 +2116,8 @@ function ConnectorEditor({
   const [config, setConfig] = useState<Row>({ ...value }),
     [error, setError] = useState(""),
     [credential, setCredential] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [diagnostic, setDiagnostic] = useState("");
   const set = (key: string, v: unknown) =>
     setConfig((c) => ({ ...c, [key]: v }));
   return (
@@ -2154,10 +2155,11 @@ function ConnectorEditor({
           </Field>
           <Field label="Authentication">
             <select
+              aria-label="Authentication"
               value={config.authType}
-              onChange={(e) => set("authType", e.target.value)}
+              onChange={(e) => {set("authType", e.target.value);setCredential("");setDiagnostic("");}}
             >
-              {["NONE", "BEARER", "BASIC", "API_KEY", "OAUTH2_CLIENT"].map(
+              {["NONE", "BEARER", "BASIC", "API_KEY", "OAUTH2_CLIENT", "WINDOWS"].map(
                 (a) => (
                   <option key={a}>{a}</option>
                 ),
@@ -2171,14 +2173,21 @@ function ConnectorEditor({
               onChange={(e) => set("secretRef", e.target.value)}
             />
           </Field>
-          <Field label="New credential (leave blank to keep existing)">
+          {config.authType === "WINDOWS" && <>
+            <Field label="Windows protocol"><select aria-label="Windows protocol" value={config.windowsProtocol || "NEGOTIATE"} onChange={e=>set("windowsProtocol",e.target.value)}><option value="NEGOTIATE">Windows Negotiate (Kerberos / SSPI)</option><option value="NTLM">Windows NTLM</option></select></Field>
+            <Field label="Windows identity"><select aria-label="Windows identity" value={config.windowsUseCurrentUser === false ? "explicit" : "current"} onChange={e=>{set("windowsUseCurrentUser",e.target.value==="current");setCredential("");setDiagnostic("");}}><option value="current">Use the application process Windows account</option><option value="explicit">Use a configured Windows username/password</option></select></Field>
+            {config.windowsUseCurrentUser === false && <Field label="Windows username"><input aria-label="Windows username" value={config.windowsUsername || ""} placeholder="DOMAIN\\username or user@domain" onChange={e=>set("windowsUsername",e.target.value)}/></Field>}
+            <p className="muted">Optional per connection. Requires Windows curl.exe with SSPI, HTTPS and a server-configured WINDOWS_AUTH_HOSTS allowlist. The current account is the account running Spring Boot/IntelliJ, not a remote browser user's Windows account. Browser SSO and streaming are separate capabilities.</p>
+            {config.id && <button type="button" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await post("/integrations/"+config.id+"/windows/check");setDiagnostic("Windows runtime ready. Destination login has not been tested. Use the connector read console to verify access.");}catch(e){setError(String(e));}finally{setBusy(false);}}}>Check saved Windows configuration</button>}
+          </>}
+          {(config.authType !== "WINDOWS" || config.windowsUseCurrentUser === false) && <Field label={config.authType === "WINDOWS" ? "Windows password (encrypted in vault)" : "New credential (leave blank to keep existing)"}>
             <input
               type="password"
               autoComplete="new-password"
               value={credential}
               onChange={(e) => setCredential(e.target.value)}
             />
-          </Field>
+          </Field>}
           {config.authType === "API_KEY" && (
             <Field label="API key header">
               <input
@@ -2314,6 +2323,7 @@ function ConnectorEditor({
           server-side; interactive OAuth consent is not part of this connector
           type.
         </p>
+        {diagnostic && <p role="status" className="muted">{diagnostic}</p>}
         {error && (
           <p className="error" role="alert">
             {error}
@@ -2327,7 +2337,7 @@ function ConnectorEditor({
             onClick={async () => {
               setBusy(true);
               try {
-                if (credential) {
+                if (credential && !(config.authType === "WINDOWS" && config.windowsUseCurrentUser !== false)) {
                   if (!config.secretRef)
                     throw new Error("Choose a secret reference");
                   await request(
