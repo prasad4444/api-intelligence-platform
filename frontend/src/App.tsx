@@ -89,6 +89,7 @@ export default function App() {
     [editor, setEditor] = useState<{ kind: string; row: Row } | null>(null),
     [palette, setPalette] = useState(false),
     [query, setQuery] = useState("");
+  useEffect(() => { setNotice(""); }, [page]);
   useEffect(() => {
     request("/me")
       .then(setUser)
@@ -112,6 +113,7 @@ export default function App() {
   }, []);
   const reload = useCallback(async () => {
     const kinds = [
+      "environments",
       "specs",
       "collections",
       "history",
@@ -131,7 +133,7 @@ export default function App() {
       "governance-runs",
     ];
     const entries = await Promise.all(
-      kinds.map(async (k) => [k, await request("/records/" + k)]),
+      kinds.map(async (k) => [k, await request(k === "environments" ? "/environments" : "/records/" + k)]),
     );
     setData(Object.fromEntries(entries));
   }, []);
@@ -249,7 +251,7 @@ export default function App() {
             </button>
           </div>
         </header>
-        <main>
+        <main className={page === "Request Studio" ? "request-studio-page" : undefined}>
           <div className="page-heading">
             <div>
               <div className="eyebrow">BUILD BETTER. SHIP TOGETHER.</div>

@@ -56,6 +56,10 @@ Browser tests start the packaged jar using an isolated in-memory database. Evide
 
 The separate Vite server is optional and is only for frontend development: run the backend and `cd frontend && npm run dev`. Vite proxies `/api` to the backend. Normal local use requires only the packaged Spring Boot JAR described above.
 
+## Request Studio update
+
+The Postman-style workbench now includes request tabs, nested collections, parameter/header tables, auth/body editors, assertions, a collection runner, response inspection, and encrypted variable profiles. Test Library generates linked cases, suites and plans from the selected saved OpenAPI contract, with an optional reviewed AI-gateway flow. See [Request Studio features, configuration and limits](docs/REQUEST_STUDIO.md).
+
 ## Workspace
 
 | Module | Available workflows |
@@ -101,7 +105,7 @@ See [integration recipes](docs/INTEGRATIONS.md) for GitHub, Devin, Jira, Friday 
 - H2 console is disabled. API documentation is available at `/swagger-ui/index.html` after sign-in.
 - Database defaults to `./data/platform.mv.db`. Stop the application before taking a file backup. Preserve the corresponding vault key securely; losing it makes credentials unrecoverable.
 - When exposing beyond localhost, terminate HTTPS at a trusted reverse proxy and enable secure cookies with `SERVER_SERVLET_SESSION_COOKIE_SECURE=true`. Use a managed secret store to inject deployment credentials.
-- Request Studio credentials are ephemeral; use Integration Hub for durable connector credentials. Avoid putting secrets in URL query strings, request bodies, test fixtures or versioned JSON records.
+- Direct Request Studio credentials are ephemeral. Saved variable profiles encrypt their values in the vault; secret values are masked and resolved by the backend. Use Integration Hub for durable connector credentials. Avoid putting secrets in URL query strings, request bodies, test fixtures or versioned JSON records.
 
 ## Docker
 

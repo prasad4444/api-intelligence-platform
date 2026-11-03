@@ -15,6 +15,8 @@ import reactor.netty.http.client.HttpClient;
 @Service
 public class RequestService {
 
+  @org.springframework.beans.factory.annotation.Autowired(required=false)
+  private com.apiintel.environments.EnvironmentService environments;
   private final NetworkGuard guard;
   private final RecordStore store;
 
@@ -24,6 +26,9 @@ public class RequestService {
   }
 
   public ObjectNode send(ObjectNode input, String actor) {
+    var sensitive = new java.util.HashSet<String>();
+    if (environments != null) { var resolved=environments.resolve(input);input=resolved.request();sensitive.addAll(resolved.secrets()); }
+    final ObjectNode payload=input;
     String method = input.path("method").asText("GET").toUpperCase();
     if (
       !Set.of(
@@ -53,7 +58,7 @@ public class RequestService {
       .method(HttpMethod.valueOf(method))
       .uri(uri)
       .headers(h ->
-        input
+        payload
           .path("headers")
           .fields()
           .forEachRemaining(e -> {
@@ -100,7 +105,10 @@ public class RequestService {
     }
     result.put("durationMs", (System.nanoTime() - start) / 1_000_000);
     result.put("method", method);
-    result.put("url", uri.toString());
+    String safeUrl=uri.toString();
+    for(String secret:sensitive) {safeUrl=safeUrl.replace(secret,"REDACTED").replace(java.net.URLEncoder.encode(secret,java.nio.charset.StandardCharsets.UTF_8),"REDACTED").replace(java.net.URLEncoder.encode(secret,java.nio.charset.StandardCharsets.UTF_8).replace("+","%20"),"REDACTED");}
+    safeUrl=safeUrl.replaceAll("(?i)([?&](?:[^=&]*(?:token|secret|password|api[_-]?key)[^=&]*)=)[^&]*","$1REDACTED");
+    result.put("url", safeUrl);
     var history = result.deepCopy();
     history.remove("body");
     history.remove("headers");

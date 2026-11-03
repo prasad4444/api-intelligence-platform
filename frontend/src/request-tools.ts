@@ -4,7 +4,7 @@ export function parseCurl(text: string): Row {
   let value = "",
     quote = "",
     escape = false;
-  for (const char of text.trim()) {
+  for (const char of text.replace(/\\\r?\n/g, " ").trim()) {
     if (escape) {
       value += char;
       escape = false;

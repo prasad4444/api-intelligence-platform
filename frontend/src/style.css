@@ -1407,3 +1407,5 @@ tr:last-child td {
   border-radius: 5px 5px 0 0;
   min-height: 2px;
 }
+
+.test-generation-context{display:flex;gap:12px;align-items:center;margin-bottom:14px}.test-generation-context p{margin-top:5px;font-size:11px}.test-generation-consent{display:flex;align-items:center;gap:8px;font-size:11px;margin:12px 0}.test-generation-note{font-size:10px;line-height:1.8}.test-generation-preview{border-top:1px solid var(--border);margin-top:18px;padding-top:10px}.test-generation-preview textarea{width:100%;margin-top:12px;padding:15px}.test-generation-summary{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin-top:15px;padding:14px;background:var(--soft);border-radius:7px}

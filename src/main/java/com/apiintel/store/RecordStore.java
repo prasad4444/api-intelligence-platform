@@ -16,6 +16,7 @@ public class RecordStore {
   private final JdbcTemplate db;
   private final ObjectMapper json;
   public static final Set<String> KINDS = Set.of(
+    "environments",
     "specs",
     "collections",
     "history",
