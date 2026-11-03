@@ -22,6 +22,8 @@ async function login(page: any) {
   await expect(
     page.getByRole("heading", { name: "Dashboard", exact: true }),
   ).toBeVisible();
+  const seed=page.locator('select[aria-label="API version"] option').filter({hasText:"Commerce API"}).first();
+  await seed.waitFor({state:"attached"});await page.getByLabel("API version").selectOption(await seed.getAttribute("value"));
 }
 test("login and every workspace module renders", async ({ page }) => {
   await login(page);

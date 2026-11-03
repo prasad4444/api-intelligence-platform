@@ -29,8 +29,7 @@ public class TestService {
       .path("paths")
       .fields()
       .forEachRemaining(p ->
-        p
-          .getValue()
+        com.apiintel.workspace.SpecService.resolveLocal(p.getValue(),spec.path("document"))
           .fields()
           .forEachRemaining(o -> {
             if (
@@ -81,13 +80,13 @@ public class TestService {
                   spec.path("document"),
                   p.getKey(),
                   o.getKey(),
-                  o.getValue(),
-                  p.getValue(),
+                  com.apiintel.workspace.SpecService.resolveLocal(o.getValue(),spec.path("document")),
+                  com.apiintel.workspace.SpecService.resolveLocal(p.getValue(),spec.path("document")),
                   type
                 )
               );
-              var security = o.getValue().has("security")
-                ? o.getValue().path("security")
+              var security = com.apiintel.workspace.SpecService.resolveLocal(o.getValue(),spec.path("document")).has("security")
+                ? com.apiintel.workspace.SpecService.resolveLocal(o.getValue(),spec.path("document")).path("security")
                 : spec.path("document").path("security");
               String expected = type.equals("negative")
                 ? "400"
@@ -99,7 +98,7 @@ public class TestService {
                 type.equals("boundary") ||
                 (type.equals("security") && security.isEmpty())
               ) {
-                var codes = o.getValue().path("responses").fieldNames();
+                var codes = com.apiintel.workspace.SpecService.resolveLocal(o.getValue(),spec.path("document")).path("responses").fieldNames();
                 while (codes.hasNext()) {
                   String code = codes.next();
                   if (code.matches("2[0-9][0-9]")) {

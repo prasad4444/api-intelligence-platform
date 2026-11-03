@@ -1,3 +1,6 @@
+import EndpointBrowser from "./EndpointBrowser";
+import ContractCompare from "./ContractCompare";
+import { listOperations } from "./endpoint-model";
 import TestGeneration from "./TestGeneration";
 import { exportDrawio, importDrawio } from "./drawio";
 import { parseCurl, snippet as makeSnippet, safeRegex } from "./request-tools";
@@ -53,13 +56,15 @@ paths:
         '200':
           description: Success
 `;
-export function Workspace({ data, spec, run, selectSpec }: PageProps) {
+export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageProps) {
   const [source, setSource] = useState(initialSpec),
     [result, setResult] = useState<unknown>(null),
-    [compare, setCompare] = useState(""),
+    [actionBusy,setActionBusy] = useState(false),
+    [actionMessage,setActionMessage] = useState(""),
+    [collectionReady,setCollectionReady] = useState(false),
     [url, setUrl] = useState("https://httpbin.org/get");
   useEffect(() => {
-    setSource(spec?.document ? yaml.dump(spec.document) : initialSpec);
+    setSource(spec?.source || (spec?.document ? yaml.dump(spec.document) : initialSpec));
   }, [spec?.id, spec?.revision]);
   let preview: Row | undefined;
   let sourceError = "";
@@ -73,18 +78,19 @@ export function Workspace({ data, spec, run, selectSpec }: PageProps) {
   } catch (e) {
     sourceError = String(e);
   }
-  const operations: Row[] = [];
-  Object.entries(preview?.paths || {}).forEach(([path, methods]) => {
-    if (!methods || typeof methods !== "object" || Array.isArray(methods)) return;
-    Object.entries(methods as Row).forEach(([method, op]) => {
-      if (["get", "post", "put", "patch", "delete", "head", "options", "trace"].includes(method) &&
-          op && typeof op === "object" && !Array.isArray(op))
-        operations.push({ ...op, path, method: method.toUpperCase() });
-    });
-  });
+  const operations=listOperations(preview);
+  const dirty=!!spec&&(!preview||source!==(spec.source||(spec.document?yaml.dump(spec.document):initialSpec)));
+  const canEdit=roles?roles.some(r=>["ROLE_ADMIN","ROLE_DEVELOPER"].includes(r)):true;
+  const canApprove=roles?.some(r=>["ROLE_ADMIN","ROLE_REVIEWER"].includes(r))??false;
+  const canCollect=roles?roles.some(r=>["ROLE_ADMIN","ROLE_DEVELOPER","ROLE_TESTER"].includes(r)):true;
+  async function action(kind:"draft"|"IN_REVIEW"|"APPROVED"|"collection") {
+    if(!spec)return;setActionBusy(true);setActionMessage("");setCollectionReady(false);
+    try{const saved=await run(()=>post("/workspace/"+spec.id+"/"+(kind==="draft"?"draft":kind==="collection"?"collection":"approval"),{expectedRevision:spec.revision,...(["IN_REVIEW","APPROVED"].includes(kind)?{status:kind}:{})}));if(saved){setActionMessage(kind==="collection"?`Collection ready: ${saved.name}. ${saved.item?.length||0} requests available in Request Studio.`:kind==="draft"?"Contract is now an editable draft.":kind==="IN_REVIEW"?"Review requested for the saved contract.":"Contract approved.");setCollectionReady(kind==="collection");}}
+    finally{setActionBusy(false);}
+  }
   return (
     <>
-      <div className="two-cols">
+      <div className="two-cols contract-grid">
         <Panel
           title="Contract workspace"
           action={<Badge>{spec?.status || "DRAFT"}</Badge>}
@@ -98,16 +104,17 @@ export function Workspace({ data, spec, run, selectSpec }: PageProps) {
             />
           </Field>
           {sourceError && <p role="alert" className="error">{sourceError}</p>}
+          <p className="workspace-dirty-message">A file upload prepares all three modules automatically. Pasted edits preview immediately; import or save them to update collections and tests.</p>
           <div className="toolbar">
             <label className="button">
-              <Upload size={15} /> Open file
+              <Upload size={15} /> Upload & prepare
               <input
                 type="file"
                 accept=".json,.yaml,.yml"
                 hidden
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
-                  if (file) setSource(await file.text());
+                  if(file){const uploaded=await file.text();setSource(uploaded);setActionMessage("");const saved=await run(()=>post("/workspace/import",{source:uploaded}));if(saved){selectSpec?.(saved.id);setActionMessage("Upload prepared: endpoint details, Request Studio collection, test cases, suites and plan are ready.");}}
                 }}
               />
             </label>
@@ -126,6 +133,7 @@ export function Workspace({ data, spec, run, selectSpec }: PageProps) {
               onClick={() => run(async () => {
                 const saved = await post("/workspace/import", { source });
                 selectSpec?.(saved.id);
+                setActionMessage("Contract imported. Collection, cases, suites and plan are ready.");
                 return saved;
               })}
             >
@@ -134,13 +142,14 @@ export function Workspace({ data, spec, run, selectSpec }: PageProps) {
             <button disabled={!preview || !spec}
               onClick={() => run(async () => {
                 const saved = await save("specs", {
-                  ...spec, document: preview, name: preview?.info?.title || "API",
+                  ...spec, source, document: preview, name: preview?.info?.title || "API",
                   version: preview?.info?.version || "1.0", status: "DRAFT",
                 });
                 selectSpec?.(saved.id);
+                setActionMessage("Contract saved. Collection and tests have been synchronized without overwriting earlier edits.");
                 return saved;
               })}>Save selected contract</button>
-            <button onClick={() => spec && setSource(yaml.dump(spec.document || {}))}>
+            <button onClick={() => spec && setSource(spec.source||yaml.dump(spec.document || {}))}>
               Load selected
             </button>
           </div>
@@ -151,63 +160,14 @@ export function Workspace({ data, spec, run, selectSpec }: PageProps) {
             Version {preview?.info?.version || "—"} · {operations.length} operations
           </p>
           <div className="toolbar">
-            <button
-              disabled={!spec}
-              onClick={() =>
-                spec && setSource(yaml.dump(spec.document || {}))
-              }
-            >
-              Edit as draft
-            </button>
-            <button
-              disabled={!spec}
-              onClick={() =>
-                run(() =>
-                  post("/workspace/" + spec!.id + "/approval", {
-                    status: "IN_REVIEW",
-                  }),
-                )
-              }
-            >
-              Request review
-            </button>
-            <button
-              disabled={!spec}
-              onClick={() =>
-                run(() =>
-                  post("/workspace/" + spec!.id + "/approval", {
-                    status: "APPROVED",
-                  }),
-                )
-              }
-            >
-              <Check size={15} /> Approve
-            </button>
-            <button
-              disabled={!spec}
-              onClick={() =>
-                run(() => post("/workspace/" + spec!.id + "/collection"))
-              }
-            >
-              Create collection
-            </button>
+            <button disabled={!spec||dirty||actionBusy||!canEdit} title={dirty?"Save the current YAML first":"Return the selected saved contract to DRAFT"} onClick={()=>void action("draft")}>Edit as draft</button>
+            <button disabled={!spec||dirty||actionBusy||!canEdit||!["DRAFT","REJECTED"].includes(spec?.status||"DRAFT")} onClick={()=>void action("IN_REVIEW")}>Request review</button>
+            <button disabled={!spec||dirty||actionBusy||!canApprove||spec.status!=="IN_REVIEW"} title={!canApprove?"Reviewer or administrator role required":"Approve the contract currently in review"} onClick={()=>void action("APPROVED")}><Check size={15}/> Approve</button>
+            <button disabled={!spec||dirty||actionBusy||!canCollect} onClick={()=>void action("collection")}>Create collection</button>
           </div>
-          <Records
-            rows={operations}
-            columns={["method", "path", "summary"]}
-            actions={(o) => (
-              <button
-                onClick={() =>
-                  setUrl(
-                    (preview?.servers?.[0]?.url ||
-                      "https://httpbin.org") + o.path,
-                  )
-                }
-              >
-                Try
-              </button>
-            )}
-          />
+          {dirty&&<p className="workspace-dirty-message">You are previewing unsaved YAML. Import as a new API or save the selected contract before using review and collection actions.</p>}
+          {actionMessage&&<div className="workspace-action-message" aria-live="polite">{actionMessage}{collectionReady&&<button onClick={()=>setPage("Request Studio")}>Open Request Studio</button>}</div>}
+          <EndpointBrowser document={preview} onUseUrl={setUrl}/>
           <Field label="Try-it URL">
             <input value={url} onChange={(e) => setUrl(e.target.value)} />
           </Field>
@@ -228,35 +188,7 @@ export function Workspace({ data, spec, run, selectSpec }: PageProps) {
           </button>
         </Panel>
       </div>
-      <Panel title="Version comparison">
-        <Field label="Compare selected contract with">
-          <select value={compare} onChange={(e) => setCompare(e.target.value)}>
-            <option value="">Choose a version</option>
-            {(data.specs || [])
-              .filter((s) => s.id !== spec?.id)
-              .map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} {s.version}
-                </option>
-              ))}
-          </select>
-        </Field>
-        <button
-          disabled={!compare}
-          onClick={() =>
-            run(async () =>
-              setResult(
-                await post("/workspace/diff", {
-                  before: spec?.document,
-                  after: data.specs.find((s) => s.id === compare)?.document,
-                }),
-              ),
-            )
-          }
-        >
-          Compare versions
-        </button>
-      </Panel>
+      <Panel title="Compare complete contract files"><ContractCompare source={source} document={preview} contracts={data.specs||[]} currentId={spec?.id}/></Panel>
       {result !== null && (
         <Panel title="Results">
           <JsonView value={result} />
@@ -276,7 +208,7 @@ export function TestLibrary({ data, spec, run, edit, reload }: PageProps) {
     [testEnvironmentId, setTestEnvironmentId] = useState(""),
     [tab, setTab] = useState("Cases");
   useEffect(() => { setSelected([]); setResult(null); }, [spec?.id]);
-  const scoped = (kind: string) => (data[kind] || []).filter(row => row.specId === spec?.id || (!row.specId && (row.caseIds || []).some((id: string) => data.tests?.some(t => t.id === id && t.specId === spec?.id))));
+  const scoped = (kind: string) => (data[kind] || []).filter(row => (!row.contractHash || !spec?.contractHash || row.contractHash===spec.contractHash) && (row.specId === spec?.id || (!row.specId && (row.caseIds || []).some((id: string) => data.tests?.some(t => t.id === id && t.specId === spec?.id)))));
   useEffect(()=>{const environment=data.environments?.find(e=>e.id===testEnvironmentId);const value=environment?.values?.find((v:Row)=>v.key==="baseUrl"&&v.enabled!==false&&!v.secret)?.value;if(value)setBase(value);},[testEnvironmentId,data.environments]);
   function executionEnv() {
     const extra = JSON.parse(executionVariables);

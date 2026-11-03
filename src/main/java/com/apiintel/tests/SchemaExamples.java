@@ -102,7 +102,9 @@ public final class SchemaExamples {
     var params = new ArrayList<JsonNode>();
     pathItem.path("parameters").forEach(params::add);
     operation.path("parameters").forEach(params::add);
-    for (var param : params) {
+    var resolvedParams=new LinkedHashMap<String,JsonNode>();
+    for(var value:params){var parameter=com.apiintel.workspace.SpecService.resolveLocal(value,doc);resolvedParams.put(parameter.path("in").asText()+":"+parameter.path("name").asText(),parameter);}
+    for (var param : resolvedParams.values()) {
       String name = param.path("name").asText(),
         value = sample(param.path("schema"), doc, boundary, 0).asText("sample");
       if (param.path("in").asText().equals("path")) url = url.replace(
@@ -120,8 +122,7 @@ public final class SchemaExamples {
       );
     }
     req.put("url", url);
-    var schema = operation
-      .path("requestBody")
+    var schema = com.apiintel.workspace.SpecService.resolveLocal(operation.path("requestBody"),doc)
       .path("content")
       .path("application/json")
       .path("schema");

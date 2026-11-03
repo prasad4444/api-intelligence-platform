@@ -67,3 +67,11 @@ describe("contract workspace", () => {
     expect(screen.getByLabelText("OpenAPI source")).toBeInTheDocument();
   });
 });
+describe("workspace action buttons",()=>{
+ const selected={...spec,status:"DRAFT"};
+ function actions(current=selected,roles=["ROLE_ADMIN"]){const setPage=vi.fn();render(<Workspace spec={current} data={{specs:[current]}} run={async fn=>fn()} edit={vi.fn()} reload={vi.fn()} setPage={setPage} roles={roles}/>);return setPage;}
+ it("requests review with the selected saved revision",async()=>{vi.mocked(post).mockResolvedValue({...selected,status:"IN_REVIEW"});actions();fireEvent.click(screen.getByText("Request review"));await waitFor(()=>expect(post).toHaveBeenCalledWith("/workspace/old/approval",{status:"IN_REVIEW",expectedRevision:3}));});
+ it("persists edit-as-draft instead of merely replacing editor text",async()=>{vi.mocked(post).mockResolvedValue(selected);actions({...selected,status:"APPROVED"});fireEvent.click(screen.getByText("Edit as draft"));await waitFor(()=>expect(post).toHaveBeenCalledWith("/workspace/old/draft",{expectedRevision:3}));});
+ it("blocks stale unsaved YAML and hides unauthorized approval capability",()=>{actions({...selected,status:"IN_REVIEW"},["ROLE_DEVELOPER"]);expect(screen.getByText("Approve")).toBeDisabled();fireEvent.change(screen.getByLabelText("OpenAPI source"),{target:{value:source}});expect(screen.getByText("Create collection")).toBeDisabled();expect(screen.getByText("Edit as draft")).toBeDisabled();expect(post).not.toHaveBeenCalled();});
+ it("shows where a created collection is available",async()=>{vi.mocked(post).mockResolvedValue({id:"c",name:"Ready collection",item:[{}]});const setPage=actions();fireEvent.click(screen.getByText("Create collection"));await screen.findByText(/Collection ready: Ready collection/);fireEvent.click(screen.getByText("Open Request Studio"));expect(setPage).toHaveBeenCalledWith("Request Studio");});
+});

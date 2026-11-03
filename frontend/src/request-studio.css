@@ -1477,3 +1477,4 @@ main.request-studio-page {
 }
 
 .rs-env-toolbar>label{flex:1;min-width:0}.rs-env-toolbar>label select,.rs-env-toolbar>label input{width:100%}.rs-has-secrets th:nth-child(4){width:110px}.rs-has-secrets td select{width:100%;border:0;font-size:10px}@media(max-width:560px){.rs-has-secrets th:nth-child(4),.rs-has-secrets td:nth-child(4){display:table-cell;width:75px}}
+.rs-item-row{display:flex;align-items:center;min-width:0}.rs-item-row>.rs-saved-request{flex:1;min-width:0;width:auto}.rs-item-row>.rs-menu{flex:none;margin-right:3px}.rs-folder>.rs-menu{margin-right:2px}.rs-shell .rs-danger{color:#bd4a40}.rs-shell button.rs-danger:hover{background:#ffede8;color:#a62f25}.dark .rs-shell button.rs-danger:hover{background:#442a2a;color:#efa59a}.rs-side-list{overflow-y:auto;overflow-x:clip}.rs-menu>div{z-index:15}

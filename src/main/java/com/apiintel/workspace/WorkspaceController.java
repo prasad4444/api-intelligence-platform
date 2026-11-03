@@ -13,14 +13,17 @@ public class WorkspaceController {
 
   private final com.apiintel.integrations.FridayEvents friday;
   private final SpecService specs;
+  private final WorkspaceArtifacts artifacts;
   private final RecordStore store;
 
   public WorkspaceController(
     SpecService specs,
     RecordStore store,
-    com.apiintel.integrations.FridayEvents friday
+    com.apiintel.integrations.FridayEvents friday,
+    WorkspaceArtifacts artifacts
   ) {
     this.friday = friday;
+    this.artifacts = artifacts;
     this.specs = specs;
     this.store = store;
   }
@@ -28,13 +31,7 @@ public class WorkspaceController {
   @PostMapping("/import")
   @PreAuthorize("hasAnyRole('ADMIN','DEVELOPER')")
   public ObjectNode load(@RequestBody Map<String, String> body, Principal p) {
-    var spec = specs.parse(body.getOrDefault("source", ""));
-    var data = store.parse("{}");
-    data.put("name", spec.path("info").path("title").asText("API"));
-    data.put("version", spec.path("info").path("version").asText("1.0"));
-    data.put("status", "DRAFT");
-    data.set("document", spec);
-    return store.save("specs", data, p.getName());
+    return artifacts.importSource(body.getOrDefault("source", ""),p.getName());
   }
 
   @PostMapping("/lint")
@@ -47,44 +44,33 @@ public class WorkspaceController {
     return specs.diff(body.path("before"), body.path("after"));
   }
 
+  private void revision(ObjectNode spec,ObjectNode body) {
+    if(!body.path("expectedRevision").canConvertToInt() || body.path("expectedRevision").asInt()!=spec.path("revision").asInt()) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,"Contract changed. Reload the selected API before this action.");
+  }
   @PostMapping("/{id}/collection")
   @PreAuthorize("hasAnyRole('ADMIN','DEVELOPER','TESTER')")
-  public Object collection(@PathVariable String id, Principal p) {
-    var c = specs.collection(
-      (ObjectNode) store.get("specs", id).get("document")
-    );
-    c.put("name", c.path("info").path("name").asText());
-    return store.save("collections", c, p.getName());
+  public Object collection(@PathVariable String id,@RequestBody ObjectNode body,Principal p) {
+    var spec=store.get("specs",id);revision(spec,body);return artifacts.collection(spec,p.getName());
   }
-
+  @PostMapping("/{id}/draft")
+  @PreAuthorize("hasAnyRole('ADMIN','DEVELOPER')")
+  public Object draft(@PathVariable String id,@RequestBody ObjectNode body,Principal p) {
+    var spec=store.get("specs",id);revision(spec,body);if(spec.path("status").asText().equals("DRAFT"))return spec;
+    spec.put("status","DRAFT");spec.remove(List.of("reviewer","reviewRequestedBy"));return store.save("specs",spec,p.getName());
+  }
   @PostMapping("/{id}/approval")
   @PreAuthorize("hasAnyRole('ADMIN','REVIEWER','DEVELOPER')")
-  public Object approval(
-    @PathVariable String id,
-    @RequestBody Map<String, String> body,
-    Principal p
-  ) {
-    var s = store.get("specs", id);
-    String status = body.getOrDefault("status", "IN_REVIEW");
-    if (
-      !Set.of("IN_REVIEW", "APPROVED", "REJECTED").contains(status)
-    ) throw new IllegalArgumentException("Invalid approval status");
-    if (
-      status.equals("APPROVED") &&
-      specs
-        .lint((ObjectNode) s.get("document"))
-        .stream()
-        .anyMatch(f -> f.get("severity").equals("ERROR"))
-    ) throw new IllegalArgumentException("Fix lint errors before approval");
-    s.put("status", status);
-    s.put("reviewer", p.getName());
-    var saved = store.save("specs", s, p.getName());
-    if (status.equals("APPROVED")) friday.emit(
-      "specApproved",
-      saved,
-      p.getName()
-    );
-    return saved;
+  public Object approval(@PathVariable String id,@RequestBody ObjectNode body,org.springframework.security.core.Authentication auth) {
+    var spec=store.get("specs",id);revision(spec,body);String status=body.path("status").asText("IN_REVIEW");
+    if(!Set.of("IN_REVIEW","APPROVED","REJECTED").contains(status))throw new IllegalArgumentException("Invalid approval status");
+    boolean allowed=auth.getAuthorities().stream().anyMatch(r->r.getAuthority().equals("ROLE_ADMIN")||r.getAuthority().equals(status.equals("IN_REVIEW")?"ROLE_DEVELOPER":"ROLE_REVIEWER"));
+    if(!allowed)throw new org.springframework.security.access.AccessDeniedException("Only an administrator or reviewer can approve/reject; developers can request review");
+    String current=spec.path("status").asText("DRAFT");
+    if(status.equals("IN_REVIEW")){if(current.equals("IN_REVIEW"))return spec;if(!Set.of("DRAFT","REJECTED").contains(current))throw new IllegalArgumentException("Return the contract to draft before requesting review");}
+    else if(!current.equals("IN_REVIEW"))throw new IllegalArgumentException("Request review before approving or rejecting this contract");
+    if(status.equals("APPROVED")&&specs.lint(specs.parse(spec.path("document").toString())).stream().anyMatch(f->f.get("severity").equals("ERROR")))throw new IllegalArgumentException("Fix lint errors before approval");
+    spec.put("status",status);if(status.equals("IN_REVIEW"))spec.put("reviewRequestedBy",auth.getName());else spec.put("reviewer",auth.getName());
+    var saved=store.save("specs",spec,auth.getName());if(status.equals("APPROVED"))friday.emit("specApproved",saved,auth.getName());return saved;
   }
 
   @GetMapping("/governance")

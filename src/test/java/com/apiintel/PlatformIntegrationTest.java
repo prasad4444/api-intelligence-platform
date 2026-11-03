@@ -94,6 +94,41 @@ class PlatformIntegrationTest {
     var invalid=env.deepCopy();invalid.putArray("allowedHosts").add("*.example.com");assertThrows(IllegalArgumentException.class,()->environments.save(invalid,"admin"));
   }
 
+  @Test
+  @org.springframework.transaction.annotation.Transactional
+  void oneImportPreparesAllModulesAndChecksWorkflowRevisionAndRoles() throws Exception {
+    String source="# Keep this comment for complete-file comparison\nopenapi: 3.0.3\ninfo:\n  title: Unified upload API\n  version: '2.0'\nservers:\n  - url: https://api.example.com\nsecurity: []\npaths:\n  /orders:\n    post:\n      operationId: createOrder\n      summary: Create order\n      requestBody:\n        content:\n          application/json:\n            schema:\n              type: object\n              properties:\n                name:\n                  type: string\n                  example: new\n      responses:\n        '201':\n          description: Created\n";
+    var imported=mvc.perform(post("/api/workspace/import").with(csrf()).contentType("application/json").content(json.writeValueAsString(Map.of("source",source)))).andExpect(status().isOk()).andReturn();
+    var record=json.readTree(imported.getResponse().getContentAsString());String id=record.path("id").asText();assertEquals(source,record.path("source").asText());
+    var collection=store.list("collections").stream().filter(c->c.path("sourceSpecId").asText().equals(id)).findFirst().orElseThrow();assertEquals(1,collection.path("item").size());assertEquals("201",collection.path("item").get(0).path("x-studio-checks").get(0).path("expected").asText());assertEquals("application/json",collection.path("item").get(0).path("request").path("header").get(0).path("value").asText());assertTrue(collection.path("item").get(0).path("request").path("body").path("raw").asText().contains("new"));assertEquals("https://api.example.com",collection.path("variable").get(0).path("value").asText());
+    assertEquals(4,store.list("tests").stream().filter(t->t.path("specId").asText().equals(id)).count());assertEquals(4,store.list("suites").stream().filter(t->t.path("specId").asText().equals(id)).count());assertEquals(1,store.list("plans").stream().filter(t->t.path("specId").asText().equals(id)).count());
+    mvc.perform(post("/api/workspace/"+id+"/collection").with(csrf()).contentType("application/json").content("{\"expectedRevision\":1}")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(collection.path("id").asText()));
+    mvc.perform(post("/api/workspace/"+id+"/approval").with(csrf()).contentType("application/json").content("{\"expectedRevision\":1,\"status\":\"APPROVED\"}")).andExpect(status().isBadRequest());
+    mvc.perform(post("/api/workspace/"+id+"/approval").with(csrf()).contentType("application/json").content("{\"expectedRevision\":1,\"status\":\"IN_REVIEW\"}")).andExpect(status().isOk());
+    mvc.perform(post("/api/workspace/"+id+"/approval").with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("dev").roles("DEVELOPER")).with(csrf()).contentType("application/json").content("{\"expectedRevision\":2,\"status\":\"APPROVED\"}")).andExpect(status().isForbidden());
+    mvc.perform(post("/api/workspace/"+id+"/draft").with(csrf()).contentType("application/json").content("{\"expectedRevision\":1}")).andExpect(status().isConflict());
+    mvc.perform(post("/api/workspace/"+id+"/approval").with(csrf()).contentType("application/json").content("{\"expectedRevision\":2,\"status\":\"APPROVED\"}")).andExpect(status().isOk());
+    mvc.perform(post("/api/workspace/"+id+"/draft").with(csrf()).contentType("application/json").content("{\"expectedRevision\":3}")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("DRAFT"));
+    assertEquals(1,store.list("collections").stream().filter(c->c.path("sourceSpecId").asText().equals(id)).count());
+  }
+
+  @Autowired
+  com.apiintel.workspace.WorkspaceArtifacts artifacts;
+
+  @Test
+  @org.springframework.transaction.annotation.Transactional
+  void savingYamlSynchronizesArtifactsWithoutOverwritingEditedCases() throws Exception {
+    String source="openapi: 3.0.3\ninfo:\n  title: Save sync API\n  version: '1'\npaths:\n  /items:\n    get:\n      operationId: listItems\n      summary: List items\n      responses:\n        '200':\n          description: OK\n";
+    var saved=artifacts.importSource(source,"admin");String id=saved.path("id").asText();
+    var test=store.list("tests").stream().filter(t->t.path("specId").asText().equals(id)).findFirst().orElseThrow();test.put("title","Manual edit retained");store.save("tests",test,"admin");
+    saved.put("source","# Comment added\n"+source);
+    mvc.perform(post("/api/records/specs").with(csrf()).contentType("application/json").content(saved.toString())).andExpect(status().isOk());
+    assertEquals("Manual edit retained",store.get("tests",test.path("id").asText()).path("title").asText());assertEquals(1,store.list("collections").stream().filter(c->c.path("sourceSpecId").asText().equals(id)).count());
+    var next=store.get("specs",id);next.put("source",source.replace("version: '1'","version: '2'"));
+    mvc.perform(post("/api/records/specs").with(csrf()).contentType("application/json").content(next.toString())).andExpect(status().isOk()).andExpect(jsonPath("$.version").value("2"));
+    assertEquals(2,store.list("collections").stream().filter(c->c.path("sourceSpecId").asText().equals(id)).count());assertEquals(8,store.list("tests").stream().filter(t->t.path("specId").asText().equals(id)).count());assertTrue(store.list("suites").stream().filter(t->t.path("specId").asText().equals(id)).allMatch(t->t.has("contractHash")));
+  }
+
   @Autowired
   MockMvc mvc;
 
@@ -292,18 +327,15 @@ class PlatformIntegrationTest {
       .readTree(res.getResponse().getContentAsString())
       .path("id")
       .asText();
-    for (String state : List.of("IN_REVIEW", "APPROVED", "REJECTED"))
-      mvc
-        .perform(
-          post("/api/workspace/" + id + "/approval")
-            .with(csrf())
-            .contentType("application/json")
-            .content("{\"status\":\"" + state + "\"}")
-        )
-        .andExpect(status().isOk());
-    mvc
-      .perform(post("/api/workspace/" + id + "/collection").with(csrf()))
-      .andExpect(status().isOk());
+    for (String state : List.of("IN_REVIEW", "APPROVED")) {
+      int revision=store.get("specs",id).path("revision").asInt();
+      mvc.perform(post("/api/workspace/"+id+"/approval").with(csrf()).contentType("application/json").content("{\"status\":\""+state+"\",\"expectedRevision\":"+revision+"}")).andExpect(status().isOk());
+    }
+    int revision=store.get("specs",id).path("revision").asInt();
+    mvc.perform(post("/api/workspace/"+id+"/draft").with(csrf()).contentType("application/json").content("{\"expectedRevision\":"+revision+"}")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("DRAFT"));
+    for(String state:List.of("IN_REVIEW","REJECTED")){revision=store.get("specs",id).path("revision").asInt();mvc.perform(post("/api/workspace/"+id+"/approval").with(csrf()).contentType("application/json").content("{\"status\":\""+state+"\",\"expectedRevision\":"+revision+"}")).andExpect(status().isOk());}
+    revision=store.get("specs",id).path("revision").asInt();
+    mvc.perform(post("/api/workspace/"+id+"/collection").with(csrf()).contentType("application/json").content("{\"expectedRevision\":"+revision+"}")).andExpect(status().isOk());
     mvc
       .perform(
         post("/api/workspace/diff")

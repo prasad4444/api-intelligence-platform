@@ -34,6 +34,7 @@ export type Draft = {
   graphqlVariables: string;
   checks: CheckRule[];
   description: string;
+  itemKey?: string;
   collectionId?: string;
   itemPath?: number[];
   dirty: boolean;
@@ -100,6 +101,7 @@ export function readItem(
     collectionId,
     itemPath,
   };
+  d.itemKey=item["x-studio-id"];
   d.headers = Array.isArray(r.header)
     ? r.header.map((h: Row) => ({
         ...pair(h.key, String(h.value ?? "")),
@@ -319,7 +321,7 @@ export function serializedItem(d: Draft): Row {
         { key: "in", value: d.apiLocation, type: "string" },
       ],
     };
-  return { name: d.name, request, "x-studio-checks": d.checks };
+  return { name: d.name, "x-studio-id":d.itemKey||d.id, request, "x-studio-checks": d.checks };
 }
 export function replaceItem(items: Row[], path: number[], value: Row): Row[] {
   return items.map((item, i) =>
