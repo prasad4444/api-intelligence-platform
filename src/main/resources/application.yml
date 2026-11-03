@@ -29,3 +29,5 @@ platform:
   seed: ${SEED_DEMO:true}
   friday-url: ${FRIDAY_URL:http://localhost:18080}
   integration-hosts: ${INTEGRATION_HOSTS:api.github.com}
+  windows-auth-hosts: ${WINDOWS_AUTH_HOSTS:}
+  windows-curl: ${WINDOWS_CURL:curl.exe}

@@ -2,6 +2,10 @@
 
 All provider keys live in Integration Hub. They are separate from platform login credentials. Give tokens only the scopes necessary for intended operations. Configure host allowlists in the deployment, then save and enable the connector.
 
+## Optional Windows authentication
+
+Each connector can select WINDOWS independently, with Negotiate or NTLM and either the application process account or a vault-backed configured account. This requires Windows SSPI curl, HTTPS and explicit server-side host configuration. See [Windows authentication setup and limits](WINDOWS_AUTH.md). Browser SSO and Windows-auth streaming are separate, unimplemented capabilities.
+
 ## Devin
 
 Preset base URL: `https://api.devin.ai`; auth: Bearer; secret: `devin-token`; organization ID: your Devin organization. Choose allowed workspace roles and enable the connection. In the action console, select this connection.
