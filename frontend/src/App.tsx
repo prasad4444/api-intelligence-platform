@@ -76,6 +76,7 @@ export type PageProps = {
   spec: Row | undefined;
   setPage: (s: string) => void;
   selectSpec?: (id: string) => void;
+  roles?: string[];
 };
 export default function App() {
   const [user, setUser] = useState<Row | null>(null),
@@ -172,6 +173,7 @@ export default function App() {
     spec,
     setPage,
     selectSpec: setSpecId,
+    roles: (user.roles||[]).map((r: Row|string)=>typeof r==="string"?r:r.authority),
   };
   return (
     <div className="app">

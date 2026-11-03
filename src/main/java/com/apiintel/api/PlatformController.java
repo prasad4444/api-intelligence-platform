@@ -15,10 +15,12 @@ public class PlatformController {
 
   private final RecordStore store;
   private final com.apiintel.workspace.SpecService specs;
+  private final com.apiintel.workspace.WorkspaceArtifacts artifacts;
 
-  public PlatformController(RecordStore store, com.apiintel.workspace.SpecService specs) {
+  public PlatformController(RecordStore store, com.apiintel.workspace.SpecService specs, com.apiintel.workspace.WorkspaceArtifacts artifacts) {
     this.store = store;
     this.specs = specs;
+    this.artifacts = artifacts;
   }
 
   @GetMapping("/csrf")
@@ -43,6 +45,7 @@ public class PlatformController {
 
   @PostMapping("/records/{kind}")
   @PreAuthorize("hasAnyRole('ADMIN','DEVELOPER','TESTER')")
+  @org.springframework.transaction.annotation.Transactional
   public ObjectNode save(
     @PathVariable String kind,
     @RequestBody ObjectNode data,
@@ -56,13 +59,19 @@ public class PlatformController {
       "Use the dedicated settings endpoints"
     );
     if (kind.equals("specs")) {
-      specs.parse(data.path("document").toString());
+      var parsed=data.has("source")?specs.parse(data.path("source").asText()):specs.parse(data.path("document").toString());
+      data.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(parsed));
+      data.set("document",parsed);if(!data.has("source"))data.put("source",parsed.toPrettyString());
+      data.put("name",parsed.path("info").path("title").asText("API"));data.put("version",parsed.path("info").path("version").asText("1.0"));
+      data.remove(java.util.List.of("reviewer","reviewRequestedBy"));
       var status = data.path("status").asText("DRAFT");
       if (!status.equals("DRAFT")) throw new IllegalArgumentException(
         "Editing a spec requires DRAFT status; approval must be requested again"
       );
     }
-    return store.save(kind, data, p.getName());
+    var saved=store.save(kind, data, p.getName());
+    if(kind.equals("specs"))artifacts.prepare(saved,p.getName());
+    return saved;
   }
 
   @DeleteMapping("/records/{kind}/{id}")

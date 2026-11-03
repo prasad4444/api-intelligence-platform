@@ -19,7 +19,7 @@ public class TestGenerationService {
   }
   private Set<String> operations(ObjectNode spec) {
     var out=new HashSet<String>();
-    spec.path("document").path("paths").fields().forEachRemaining(p -> p.getValue().fieldNames().forEachRemaining(m -> {
+    spec.path("document").path("paths").fields().forEachRemaining(p -> com.apiintel.workspace.SpecService.resolveLocal(p.getValue(),spec.path("document")).fieldNames().forEachRemaining(m -> {
       if(Set.of("get","post","put","patch","delete","head","options").contains(m))out.add(m.toUpperCase()+" "+p.getKey());
     }));
     if(out.isEmpty())throw new IllegalArgumentException("Selected contract has no supported operations. Save valid YAML in API Workspace first.");
@@ -34,7 +34,7 @@ public class TestGenerationService {
     for(String type:List.of("positive","negative","boundary","security")) {
       var suite=store.list("suites").stream().filter(s->s.path("generationKey").asText().equals(key+":"+type)).findFirst().orElse(null);
       if(suite==null) {
-        suite=store.parse("{}"); suite.put("name",spec.path("name").asText()+" · "+type);suite.put("specId",specId);suite.put("specRevision",spec.path("revision").asInt());suite.put("generationKey",key+":"+type);
+        suite=store.parse("{}"); suite.put("name",spec.path("name").asText()+" · "+type);suite.put("specId",specId);suite.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(spec.path("document")));suite.put("specRevision",spec.path("revision").asInt());suite.put("generationKey",key+":"+type);
         var ids=suite.putArray("caseIds");for(var c:cases)if(c.path("type").asText().equals(type))ids.add(c.path("id").asText());
         suite=store.save("suites",suite,actor);
       }
@@ -42,7 +42,7 @@ public class TestGenerationService {
     }
     var plan=store.list("plans").stream().filter(p->p.path("generationKey").asText().equals(key)).findFirst().orElse(null);
     if(plan==null) {
-      plan=store.parse("{}");plan.put("name",spec.path("name").asText()+" · API regression plan");plan.put("specId",specId);plan.put("specRevision",spec.path("revision").asInt());plan.put("generationKey",key);
+      plan=store.parse("{}");plan.put("name",spec.path("name").asText()+" · API regression plan");plan.put("specId",specId);plan.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(spec.path("document")));plan.put("specRevision",spec.path("revision").asInt());plan.put("generationKey",key);
       var ids=plan.putArray("caseIds");for(var c:cases)ids.add(c.path("id").asText());
       var suiteIds=plan.putArray("suiteIds");for(var s:suites)suiteIds.add(s.path("id").asText());
       plan=store.save("plans",plan,actor);
@@ -73,7 +73,7 @@ public class TestGenerationService {
     else if(response.path("content").isArray()) {var text=new StringBuilder();for(var block:response.path("content"))text.append(block.path("text").asText());response=TextNode.valueOf(text.toString());}
     if(response.isTextual()) {String text=response.asText().trim().replaceFirst("^```(?:json)?\\s*","").replaceFirst("\\s*```$","");try{response=new ObjectMapper().readTree(text);}catch(Exception e){throw new IllegalArgumentException("Provider did not return valid test bundle JSON. Check its response mapping.");}}
     var bundle=validate(spec,response);
-    var out=store.parse("{}");out.put("specId",specId);out.put("specRevision",spec.path("revision").asInt());out.put("integrationId",id);out.set("bundle",bundle);return out;
+    var out=store.parse("{}");out.put("specId",specId);out.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(spec.path("document")));out.put("specRevision",spec.path("revision").asInt());out.put("integrationId",id);out.set("bundle",bundle);return out;
   }
   public ObjectNode validate(ObjectNode spec,JsonNode source) {
     var allowed=operations(spec);
@@ -109,10 +109,10 @@ public class TestGenerationService {
     if(!specId.equals(preview.path("specId").asText())||spec.path("revision").asInt()!=preview.path("specRevision").asInt())throw new IllegalArgumentException("Contract changed. Generate a fresh preview before saving.");
     String connector=preview.path("integrationId").asText();integrations.authorize(connector);
     var config=integrations.config(connector);if(!config.path("enabled").asBoolean()||!config.path("testGenerationEnabled").asBoolean())throw new IllegalArgumentException("AI test generation connection is disabled");
-    var bundle=validate(spec,preview.path("bundle"));var cases=new HashMap<String,String>();var suites=new HashMap<String,ObjectNode>();var out=store.parse("{}");out.put("specId",specId);var savedCases=out.putArray("cases");
-    for(var c:bundle.path("cases")) {var t=(ObjectNode)c.deepCopy();String key=t.remove("key").asText();t.put("specId",specId);t.put("specRevision",spec.path("revision").asInt());t.put("status","Draft");t.put("source","AI reviewed draft");t.put("integrationId",connector);var saved=store.save("tests",t,actor);cases.put(key,saved.path("id").asText());savedCases.add(saved);}
-    var savedSuites=out.putArray("suites");for(var s:bundle.path("suites")) {var t=store.parse("{}");t.put("name",s.path("name").asText());t.put("specId",specId);t.put("specRevision",spec.path("revision").asInt());var ids=t.putArray("caseIds");for(var ref:s.path("caseKeys"))ids.add(cases.get(ref.asText()));var saved=store.save("suites",t,actor);suites.put(s.path("key").asText(),saved);savedSuites.add(saved);}
-    var savedPlans=out.putArray("plans");for(var p:bundle.path("plans")) {var t=store.parse("{}");t.put("name",p.path("name").asText());t.put("specId",specId);t.put("specRevision",spec.path("revision").asInt());var ids=t.putArray("suiteIds");var caseIds=new LinkedHashSet<String>();for(var ref:p.path("suiteKeys")) {var s=suites.get(ref.asText());ids.add(s.path("id").asText());for(var c:s.path("caseIds"))caseIds.add(c.asText());}var cs=t.putArray("caseIds");caseIds.forEach(cs::add);savedPlans.add(store.save("plans",t,actor));}
+    var bundle=validate(spec,preview.path("bundle"));var cases=new HashMap<String,String>();var suites=new HashMap<String,ObjectNode>();var out=store.parse("{}");out.put("specId",specId);out.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(spec.path("document")));var savedCases=out.putArray("cases");
+    for(var c:bundle.path("cases")) {var t=(ObjectNode)c.deepCopy();String key=t.remove("key").asText();t.put("specId",specId);t.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(spec.path("document")));t.put("specRevision",spec.path("revision").asInt());t.put("status","Draft");t.put("source","AI reviewed draft");t.put("integrationId",connector);var saved=store.save("tests",t,actor);cases.put(key,saved.path("id").asText());savedCases.add(saved);}
+    var savedSuites=out.putArray("suites");for(var s:bundle.path("suites")) {var t=store.parse("{}");t.put("name",s.path("name").asText());t.put("specId",specId);t.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(spec.path("document")));t.put("specRevision",spec.path("revision").asInt());var ids=t.putArray("caseIds");for(var ref:s.path("caseKeys"))ids.add(cases.get(ref.asText()));var saved=store.save("suites",t,actor);suites.put(s.path("key").asText(),saved);savedSuites.add(saved);}
+    var savedPlans=out.putArray("plans");for(var p:bundle.path("plans")) {var t=store.parse("{}");t.put("name",p.path("name").asText());t.put("specId",specId);t.put("contractHash",com.apiintel.workspace.WorkspaceArtifacts.hash(spec.path("document")));t.put("specRevision",spec.path("revision").asInt());var ids=t.putArray("suiteIds");var caseIds=new LinkedHashSet<String>();for(var ref:p.path("suiteKeys")) {var s=suites.get(ref.asText());ids.add(s.path("id").asText());for(var c:s.path("caseIds"))caseIds.add(c.asText());}var cs=t.putArray("caseIds");caseIds.forEach(cs::add);savedPlans.add(store.save("plans",t,actor));}
     return out;
   }
 }

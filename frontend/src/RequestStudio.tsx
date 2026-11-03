@@ -1,3 +1,4 @@
+import {assignItemIds,itemAt,itemLocations,changeItems} from "./collection-tree";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
@@ -42,12 +43,7 @@ import {
 } from "./studio-model";
 import "./request-studio.css";
 const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
-const sanitizeItems = (items: Row[]): Row[] =>
-  items.map((i) =>
-    Array.isArray(i.item)
-      ? { name: i.name, item: sanitizeItems(i.item) }
-      : serializedItem(readItem(i)),
-  );
+const sanitizeItems=(items:Row[]):Row[]=>items.map(i=>Array.isArray(i.item)?{name:i.name,item:sanitizeItems(i.item)}:{...serializedItem(readItem(i)),...(Array.isArray(i.response)?{response:i.response.map((r:Row)=>({...r,...(r.originalRequest?{originalRequest:serializedItem(readItem({request:r.originalRequest})).request}:{})}))}:{})});
 const sizes = (n: number) =>
   n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " KB";
 function KeyValues({
@@ -176,101 +172,15 @@ function JsonTree({
     </div>
   );
 }
-function CollectionTree({
-  items,
-  collectionId,
-  path = [],
-  search,
-  onOpen,
-  onFolder,
-}: {
-  items: Row[];
-  collectionId: string;
-  path?: number[];
-  search: string;
-  onOpen: (item: Row, c: string, p: number[]) => void;
-  onFolder: (c: string, p: number[]) => void;
-}) {
-  const [closed, setClosed] = useState<string[]>([]);
-  return (
-    <>
-      {items.map((item, i) => {
-        const itemPath = [...path, i],
-          key = itemPath.join(".");
-        if (Array.isArray(item.item)) {
-          if (
-            search &&
-            !JSON.stringify(item).toLowerCase().includes(search.toLowerCase())
-          )
-            return null;
-          return (
-            <div key={key}>
-              <div className="rs-folder">
-                <button
-                  onClick={() =>
-                    setClosed((p) =>
-                      p.includes(key)
-                        ? p.filter((k) => k !== key)
-                        : [...p, key],
-                    )
-                  }
-                >
-                  {closed.includes(key) ? (
-                    <ChevronRight size={13} />
-                  ) : (
-                    <ChevronDown size={13} />
-                  )}
-                  <Folder size={14} />
-                  <span>{item.name}</span>
-                </button>
-                <button
-                  aria-label={`New request in ${item.name}`}
-                  onClick={() => onFolder(collectionId, itemPath)}
-                >
-                  <Plus size={13} />
-                </button>
-              </div>
-              {!closed.includes(key) && (
-                <div className="rs-nested">
-                  <CollectionTree
-                    items={item.item}
-                    collectionId={collectionId}
-                    path={itemPath}
-                    search={search}
-                    onOpen={onOpen}
-                    onFolder={onFolder}
-                  />
-                </div>
-              )}
-            </div>
-          );
-        }
-        if (
-          search &&
-          !`${item.name} ${pretty(item.request)}`
-            .toLowerCase()
-            .includes(search.toLowerCase())
-        )
-          return null;
-        return (
-          <button
-            className="rs-saved-request"
-            key={key}
-            onClick={() => onOpen(item, collectionId, itemPath)}
-          >
-            <span
-              className={`rs-method ${item.request?.method?.toLowerCase()}`}
-            >
-              {item.request?.method || "GET"}
-            </span>
-            <span>{item.name || "Untitled request"}</span>
-          </button>
-        );
-      })}
-    </>
-  );
+function ItemMenu({name,onAction}:{name:string;onAction:(action:string)=>void}) {return <details className="rs-menu"><summary aria-label={`Actions for ${name}`}><MoreHorizontal size={14}/></summary><div>{["Rename","Duplicate","Move","Delete"].map(action=><button key={action} className={action==="Delete"?"rs-danger":""} onClick={e=>{e.currentTarget.closest("details")?.removeAttribute("open");onAction(action);}}>{action}</button>)}</div></details>;}
+function CollectionTree({items,collectionId,path=[],search,onOpen,onFolder,onManage}:{items:Row[];collectionId:string;path?:number[];search:string;onOpen:(item:Row,c:string,p:number[])=>void;onFolder:(c:string,p:number[])=>void;onManage:(action:string,c:string,path:number[],name:string)=>void}) {
+ const [closed,setClosed]=useState<string[]>([]);
+ return <>{items.map((item,i)=>{const itemPath=[...path,i],key=item["x-studio-id"]||itemPath.join(".");if(search&&!JSON.stringify(item).toLowerCase().includes(search.toLowerCase()))return null;
+  if(Array.isArray(item.item))return <div key={key}><div className="rs-folder"><button onClick={()=>setClosed(old=>old.includes(key)?old.filter(x=>x!==key):[...old,key])}>{closed.includes(key)?<ChevronRight size={13}/>:<ChevronDown size={13}/>}<Folder size={14}/><span>{item.name}</span></button><button aria-label={`New request in ${item.name}`} onClick={()=>onFolder(collectionId,itemPath)}><Plus size={13}/></button><ItemMenu name={item.name} onAction={action=>onManage(action,collectionId,itemPath,item.name)}/></div>{!closed.includes(key)&&<div className="rs-nested"><CollectionTree items={item.item} collectionId={collectionId} path={itemPath} search={search} onOpen={onOpen} onFolder={onFolder} onManage={onManage}/></div>}</div>;
+  return <div className="rs-item-row" key={key}><button className="rs-saved-request" onClick={()=>onOpen(item,collectionId,itemPath)}><span className={`rs-method ${item.request?.method?.toLowerCase()}`}>{item.request?.method||"GET"}</span><span>{item.name||"Untitled request"}</span></button><ItemMenu name={item.name||"Untitled request"} onAction={action=>onManage(action,collectionId,itemPath,item.name)}/></div>;
+ })}</>;
 }
-export default function RequestStudio({ data, reload }: PageProps) {
+export default function RequestStudio({ data, reload, roles }: PageProps) {
   const [tabs, setTabs] = useState<Draft[]>(() => [
     { ...newDraft(), name: "New request", url: "{{baseUrl}}/get" },
   ]);
@@ -290,6 +200,7 @@ export default function RequestStudio({ data, reload }: PageProps) {
   const [dialog, setDialog] = useState(""),
     [importText, setImportText] = useState(""),
     [importError, setImportError] = useState("");
+  const [managedPath,setManagedPath]=useState<number[]|null>(null),[moveTo,setMoveTo]=useState("[]"),[managedRevision,setManagedRevision]=useState<number|undefined>();
   const [target, setTarget] = useState(""),
     [folderPath, setFolderPath] = useState<number[]>([]),
     [newName, setNewName] = useState(""),
@@ -313,283 +224,7 @@ export default function RequestStudio({ data, reload }: PageProps) {
     for(const profile of profiles){for(const value of profile.values)if(value.enabled&&value.key){if(profile.revision&&value.secret&&value.hasValue&&!value.value){vars[value.key]="{{"+value.key+"}}";deferred.push(value.key);}else vars[value.key]=value.value;}if(profile.scope==="global")Object.assign(vars,defaults);}
     return {variables:vars,deferred,profileIds:{...(globalProfile?.revision?{globalProfileId:globalProfile.id}:{}),...(profiles.find(p=>p.scope==="collection"&&p.revision)?{collectionProfileId:profiles.find(p=>p.scope==="collection")!.id}:{}),...(environment?.revision?{environmentId:environment.id}:{}),collectionId}};
   }
-  const {variables}=variableContext(draft.collectionId);
-  function requestPayload(d:Draft){const context=variableContext(d.collectionId);return {...buildRequest(d,context.variables,context.deferred),...context.profileIds};}
-  const updateProfile=(change:Partial<Profile>)=>setEnvs(old=>old.map(e=>e.id===editEnvId?{...e,...change}:e));
-  async function persistEnvironment(){if(!editingEnvironment)return;setSaving(true);setImportError("");try{const saved=await post("/environments",{...editingEnvironment,id:editingEnvironment.id==="local"?undefined:editingEnvironment.id});setEnvs(old=>[...old.filter(e=>e.id!==editingEnvironment.id),saved]);setEditEnvId(saved.id);if(saved.scope==="environment")setEnvId(saved.id);await reload();setNotice("Variable profile saved. Secret values are encrypted and resolved by the backend.");}catch(e){setImportError(String(e));}finally{setSaving(false);}}
-  async function removeEnvironment(){if(!editingEnvironment)return;if(!window.confirm("Delete this variable profile?"))return;setSaving(true);try{if(editingEnvironment.revision)await request("/environments/"+editingEnvironment.id,{method:"DELETE"});setEnvs(old=>old.filter(e=>e.id!==editingEnvironment.id));setEditEnvId("");if(envId===editingEnvironment.id)setEnvId("");await reload();}catch(e){setImportError(String(e));}finally{setSaving(false);}}
-  const [codeLanguage, setCodeLanguage] = useState("curl"),
-    [consoleOpen, setConsoleOpen] = useState(false);
-  const [logs, setLogs] = useState<{ time: string; message: string }[]>([]);
-  const [runner, setRunner] = useState<Row[]>([]),
-    [running, setRunning] = useState(false),
-    [iterations, setIterations] = useState(1),
-    [stopOnFailure, setStopOnFailure] = useState(false);
-  const controllers = useRef(new Map<string, AbortController>()),
-    runnerAbort = useRef(false);
-  const runnerController = useRef<AbortController | null>(null);
-  const current = responses[draft.id];
-  useEffect(
-    () => () => {
-      controllers.current.forEach((c) => c.abort());
-      runnerAbort.current = true;
-      runnerController.current?.abort();
-    },
-    [],
-  );
-  const patch = (changes: Partial<Draft>) =>
-    setTabs((old) =>
-      old.map((d) =>
-        d.id === draft.id ? { ...d, ...changes, dirty: true } : d,
-      ),
-    );
-  const addTab = (d = newDraft()) => {
-    setTabs((t) => [...t, d]);
-    setActive(d.id);
-    setError("");
-  };
-  const openItem = (item: Row, c: string, p: number[]) => {
-    const existing = tabs.find(
-      (d) => d.collectionId === c && pretty(d.itemPath) === pretty(p),
-    );
-    if (existing) setActive(existing.id);
-    else addTab(readItem(item, c, p));
-  };
-  const closeTab = (id: string) => {
-    const closing = tabs.find((t) => t.id === id);
-    if (
-      closing?.dirty &&
-      !window.confirm("Discard unsaved changes to this request?")
-    )
-      return;
-    controllers.current.get(id)?.abort();
-    const rest = tabs.filter((t) => t.id !== id);
-    if (!rest.length) {
-      const d = newDraft();
-      setTabs([d]);
-      setActive(d.id);
-    } else {
-      setTabs(rest);
-      if (active === id) setActive(rest[rest.length - 1].id);
-    }
-    setResponses((old) => {
-      const next = { ...old };
-      delete next[id];
-      return next;
-    });
-  };
-  async function send() {
-    const snapshot = draft;
-    if (controllers.current.has(snapshot.id)) return;
-    setError("");
-    setNotice("");
-    const controller = new AbortController();
-    try {
-      const payload = requestPayload(snapshot);
-      controllers.current.set(snapshot.id, controller);
-      setSending((ids) => [...ids, snapshot.id]);
-      // Log method only; credentials and URLs may contain secrets.
-      setLogs((l) => [
-        ...l.slice(-99),
-        {
-          time: new Date().toLocaleTimeString(),
-          message: `${snapshot.method} request started`,
-        },
-      ]);
-      const result = await request("/client/send", {
-        method: "POST",
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      const completed = {
-        ...result,
-        checks: evaluateChecks(snapshot.checks, result),
-      };
-      if (!controller.signal.aborted)
-        setResponses((old) => ({ ...old, [snapshot.id]: completed }));
-      setLogs((l) => [
-        ...l.slice(-99),
-        {
-          time: new Date().toLocaleTimeString(),
-          message: `${snapshot.method} completed · ${result.status} · ${result.durationMs} ms`,
-        },
-      ]);
-      await reload();
-    } catch (e) {
-      if (!controller.signal.aborted) setError(String(e));
-      else
-        setNotice(
-          "Request cancelled. The destination may already have processed it.",
-        );
-    } finally {
-      controllers.current.delete(snapshot.id);
-      setSending((ids) => ids.filter((id) => id !== snapshot.id));
-    }
-  }
-  const sendRef = useRef(send);
-  sendRef.current = send;
-  const saveRef = useRef(() => {});
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if (e.key === "Enter") {
-        e.preventDefault();
-        void sendRef.current();
-      }
-      if (e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        saveRef.current();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-  function openSave() {
-    setTarget(draft.collectionId || data.collections?.[0]?.id || "");
-    setFolderPath([]);
-    setNewName(draft.name);
-    setDialog("Save request");
-    setImportError("");
-  }
-  saveRef.current = openSave;
-  async function persistRequest() {
-    setSaving(true);
-    setImportError("");
-    const snapshot = { ...draft, name: newName.trim() || "Untitled request" };
-    try {
-      let collection = data.collections?.find((c) => c.id === target);
-      if (!collection)
-        collection = await save("collections", {
-          name: "My collection",
-          info: {
-            name: "My collection",
-            schema:
-              "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-          },
-          item: [],
-        });
-      const item = serializedItem(snapshot);
-      let itemPath: number[], items: Row[];
-      if (snapshot.collectionId === collection!.id && snapshot.itemPath) {
-        itemPath = snapshot.itemPath;
-        items = replaceItem(collection!.item || [], itemPath, item);
-      } else {
-        const children = folderPath.reduce(
-          (node: Row[], i: number) => node[i]?.item || [],
-          collection!.item || [],
-        );
-        itemPath = [...folderPath, children.length];
-        const append = (nodes: Row[], path: number[]): Row[] =>
-          path.length
-            ? nodes.map((n, i) =>
-                i === path[0]
-                  ? { ...n, item: append(n.item || [], path.slice(1)) }
-                  : n,
-              )
-            : [...nodes, item];
-        items = append(collection!.item || [], folderPath);
-      }
-      await save("collections", { ...collection, item: items });
-      setTabs((old) =>
-        old.map((d) =>
-          d.id === snapshot.id
-            ? {
-                ...d,
-                name: snapshot.name,
-                collectionId: collection!.id,
-                itemPath,
-                dirty: false,
-              }
-            : d,
-        ),
-      );
-      await reload();
-      setDialog("");
-      setNotice(
-        "Request saved. Auth fields and recognized credential headers/query values are saved as variable references.",
-      );
-    } catch (e) {
-      setImportError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-  async function importContent(text = importText) {
-    setImportError("");
-    setSaving(true);
-    try {
-      if (text.trim().startsWith("curl")) {
-        const parsed = parseCurl(text),
-          d = readItem({ name: "Imported curl", request: parsed });
-        const authKey = Object.keys(parsed.headers).find(
-          (k) => k.toLowerCase() === "authorization",
-        );
-        if (authKey && /^Bearer /i.test(parsed.headers[authKey])) {
-          d.auth = "bearer";
-          d.token = parsed.headers[authKey].slice(7);
-          d.headers = d.headers.filter((h) => h.key !== authKey);
-        }
-        addTab({ ...d, dirty: true });
-        setImportText("");
-        setDialog("");
-        setNotice("curl imported into a new request tab.");
-      } else {
-        const collection = JSON.parse(text);
-        if (
-          !collection.info?.schema?.includes("v2.1.0") ||
-          !Array.isArray(collection.item)
-        )
-          throw new Error(
-            "Paste a curl command or a Postman Collection v2.1 JSON document.",
-          );
-        const clean = (items: Row[]): Row[] =>
-          items.map((i) =>
-            Array.isArray(i.item)
-              ? { name: i.name, item: clean(i.item) }
-              : serializedItem(readItem(i)),
-          );
-        const saved = await save("collections", {
-          name: collection.info.name,
-          info: collection.info,
-          item: clean(collection.item),
-        });
-        await reload();
-        setTarget(saved.id);
-        setImportText("");
-        setDialog("");
-        setNotice(
-          "Collection imported. Credential fields use variable references.",
-        );
-      }
-    } catch (e) {
-      setImportError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-  async function addCollection() {
-    if (!newName.trim()) return;
-    setSaving(true);
-    setImportError("");
-    try {
-      await save("collections", {
-        name: newName.trim(),
-        info: {
-          name: newName.trim(),
-          schema:
-            "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-        },
-        item: [],
-      });
-      await reload();
-      setDialog("");
-    } catch (e) {
-      setImportError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-  async function addFolder() {
+  const {variables}=vari…3475 tokens truncated…nction addFolder() {
     const c = data.collections?.find((c) => c.id === target);
     if (!c || !newName.trim()) return;
     setSaving(true);
@@ -876,6 +511,7 @@ export default function RequestStudio({ data, reload }: PageProps) {
                           >
                             Export v2.1
                           </button>
+                          <button onClick={()=>manage("Rename",c.id,null,c.name)}>Rename collection</button><button onClick={()=>manage("Duplicate",c.id,null,c.name)}>Duplicate collection</button><button className="rs-danger" disabled={roles? !roles.includes("ROLE_ADMIN"):false} title="Collection deletion requires an administrator" onClick={()=>manage("Delete",c.id,null,c.name)}>Delete collection</button>
                         </div>
                       </details>
                     </div>
@@ -885,6 +521,7 @@ export default function RequestStudio({ data, reload }: PageProps) {
                         collectionId={c.id}
                         search={search}
                         onOpen={openItem}
+                        onManage={manage}
                         onFolder={(id, path) => {
                           const d = newDraft();
                           d.collectionId = id;
@@ -1729,6 +1366,10 @@ export default function RequestStudio({ data, reload }: PageProps) {
                 <X size={18} />
               </button>
             </header>
+            {/^(Rename|Duplicate|Delete|Move) (collection|item)$/.test(dialog)&&<>
+              {dialog.startsWith("Delete")?<p>Delete <strong>{newName}</strong>{managedPath===null?" and all its folders and requests":" and any nested requests"}? Open requests will remain as unsaved tabs. This action cannot be undone.</p>:dialog.startsWith("Rename")?<label>Name<input aria-label="Managed item name" value={newName} onChange={e=>setNewName(e.target.value)}/></label>:dialog.startsWith("Move")?<label>Destination folder<select aria-label="Move destination" value={moveTo} onChange={e=>setMoveTo(e.target.value)}><option value="[]">Collection root</option>{itemLocations(data.collections?.find(c=>c.id===target)?.item||[]).filter(x=>Array.isArray(x.item.item)&&!(managedPath&&x.path.length>=managedPath.length&&managedPath.every((v,i)=>x.path[i]===v))).map(x=><option key={JSON.stringify(x.path)} value={JSON.stringify(x.path)}>{x.path.map((_,i)=>itemAt(data.collections?.find(c=>c.id===target)?.item||[],x.path.slice(0,i+1))?.name).join(" / ")}</option>)}</select></label>:<p>Create a separate copy of <strong>{newName}</strong>?</p>}
+              <footer><button disabled={saving} onClick={()=>setDialog("")}>Cancel</button><button className={dialog.startsWith("Delete")?"rs-danger":"rs-orange"} disabled={saving} onClick={()=>void applyManagement()}>{saving?"Working…":dialog.split(" ")[0]}</button></footer>
+            </>}
             {dialog === "Import" && (
               <>
                 <p>

@@ -56,6 +56,10 @@ Browser tests start the packaged jar using an isolated in-memory database. Evide
 
 The separate Vite server is optional and is only for frontend development: run the backend and `cd frontend && npm run dev`. Vite proxies `/api` to the backend. Normal local use requires only the packaged Spring Boot JAR described above.
 
+## Unified contract workflow
+
+One YAML/JSON upload now prepares the API endpoint browser, a linked Request Studio collection, and built-in test cases, suites and a plan. Review actions use saved revisions and role checks. Compare complete files in a colored side-by-side dialog, and rename, duplicate and delete collections, and move folders/requests within a collection. See [Unified workspace workflow](docs/UNIFIED_WORKSPACE.md).
+
 ## Request Studio update
 
 The Postman-style workbench now includes request tabs, nested collections, parameter/header tables, auth/body editors, assertions, a collection runner, response inspection, and encrypted variable profiles. Test Library generates linked cases, suites and plans from the selected saved OpenAPI contract, with an optional reviewed AI-gateway flow. See [Request Studio features, configuration and limits](docs/REQUEST_STUDIO.md).

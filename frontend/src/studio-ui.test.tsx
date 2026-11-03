@@ -5,6 +5,7 @@ import {
   screen,
   fireEvent,
   waitFor,
+  within,
 } from "@testing-library/react";
 import RequestStudio from "./RequestStudio";
 import TestGeneration from "./TestGeneration";
@@ -124,6 +125,12 @@ describe("Request Studio interactions", () => {
     );
     expect(screen.getByLabelText("HTTP method")).toHaveValue("POST");
   });
+});
+describe("save request to another collection",()=>{
+ it("copies a saved request using a fresh identity and preserves its documented examples",async()=>{vi.mocked(save).mockResolvedValue({id:"other"});const original={...collection,item:[{...collection.item[0],"x-studio-id":"saved-item",response:[{name:"OK",code:200,body:'{"ok":true}'}]}]};render(<RequestStudio {...props} data={{collections:[original,{id:"other",name:"Other",item:[],revision:1}],history:[]}}/>);fireEvent.click(screen.getByText("Read orders"));fireEvent.click(screen.getByRole("button",{name:/^Save /}));fireEvent.change(screen.getByLabelText("Save collection"),{target:{value:"other"}});fireEvent.click(screen.getByRole("button",{name:"Save request"}));await waitFor(()=>expect(save).toHaveBeenCalled());const sent=vi.mocked(save).mock.calls[0][1];expect(sent.id).toBe("other");expect(sent.item[0]["x-studio-id"]).not.toBe("saved-item");expect(sent.item[0].response[0].code).toBe(200);});
+});
+describe("collection management dialogs",()=>{
+ it("requires confirmation before deleting a collection and detaches open requests",async()=>{vi.mocked(request).mockResolvedValue(null);render(<RequestStudio {...props}/>);fireEvent.click(screen.getByText("Read orders"));fireEvent.click(screen.getByLabelText("Actions for Orders"));fireEvent.click(screen.getByText("Delete collection"));expect(request).not.toHaveBeenCalled();expect(screen.getByRole("dialog",{name:"Delete collection"})).toBeInTheDocument();fireEvent.click(within(screen.getByRole("dialog",{name:"Delete collection"})).getByRole("button",{name:"Delete"}));await waitFor(()=>expect(request).toHaveBeenCalledWith("/records/collections/c",{method:"DELETE"}));expect(screen.getByLabelText("Request name")).toHaveValue("Read orders");});
 });
 describe("API-linked test generation", () => {
   const spec = {
