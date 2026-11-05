@@ -147,6 +147,11 @@ public class IntegrationController {
     if (prompt.length() > 20000) throw new IllegalArgumentException(
       "Prompt is too large"
     );
+    if (prompt.isBlank()) throw new IllegalArgumentException("Enter a prompt");
+    if (c.path("aiChatEnabled").asBoolean()) {
+      var response = service.call(c, "POST", c.path("chatPath").asText(), AiChat.request(c, prompt), p.getName());
+      return Map.of("response", AiChat.response(c, response));
+    }
     var b = store.parse("{}");
     b.put("model", c.path("model").asText(""));
     String path;
@@ -174,5 +179,39 @@ public class IntegrationController {
       );
     }
     return service.call(c, "POST", path, b, p.getName());
+  }
+
+  @PostMapping("/{id}/jira/check")
+  public Object checkJira(@PathVariable String id, Principal principal) {
+    var config = jira(id);
+    var profile = service.call(config, "GET", jiraApi(config) + "/myself", null, principal.getName());
+    if (!profile.isObject() || !profile.hasNonNull("displayName")) {
+      throw new IllegalArgumentException("Jira did not return an account profile. Check the site URL and token");
+    }
+    return Map.of("displayName", profile.path("displayName").asText());
+  }
+
+  @PostMapping("/{id}/jira/search")
+  public Object searchJira(@PathVariable String id, @RequestBody Map<String, String> data, Principal principal) {
+    var config = jira(id);
+    String jql = data.getOrDefault("jql", "").trim();
+    if (jql.isBlank() || jql.length() > 8000) throw new IllegalArgumentException("Enter JQL of up to 8,000 characters");
+    String api = jiraApi(config);
+    String endpoint = api.equals("/rest/api/2") ? "/search" : "/search/jql";
+    String query = java.net.URLEncoder.encode(jql, java.nio.charset.StandardCharsets.UTF_8);
+    return service.call(config, "GET", api + endpoint + "?jql=" + query, null, principal.getName());
+  }
+
+  private ObjectNode jira(String id) {
+    service.authorize(id);
+    var config = service.config(id);
+    if (!config.path("provider").asText().equals("jira")) {
+      throw new IllegalArgumentException("Select a Jira connection");
+    }
+    return config;
+  }
+
+  private String jiraApi(ObjectNode config) {
+    return config.path("jiraDeployment").asText().equals("data-center") ? "/rest/api/2" : "/rest/api/3";
   }
 }

@@ -52,6 +52,21 @@ test('one YAML upload links endpoint details, workflow, collection and tests, wi
  await login(page);await page.locator('nav').getByRole('button',{name:'API Workspace',exact:true}).click();
  await page.locator('input[type=file]').setInputFiles({name:'unified.yaml',mimeType:'application/yaml',buffer:Buffer.from(source)});
  await expect(page.getByRole('status')).toContainText('Saved successfully');await expect(page.getByLabel('OpenAPI source')).toHaveValue(source);
+ await page.locator('.swagger-operation > summary').filter({hasText:'/orders'}).click();
+ await expect(page.locator('.swagger-operation')).toContainText('X-Team');
+ await expect(page.locator('.swagger-operation')).toContainText('Invalid order');
+ await expect(page.getByLabel('request object example')).toContainText('"name": "new"');
+ const requestSent = page.waitForRequest(req => req.url().endsWith('/api/client/send'));
+ await page.route('**/api/client/send', route => route.fulfill({json: {status: 201, durationMs: 5, body: 'Created'}}));
+ await page.getByRole('button',{name:'Try it out',exact:true}).click();
+ await page.getByLabel('X-Team header parameter').fill('qa');
+ await page.getByRole('button',{name:'Execute',exact:true}).click();
+ expect((await requestSent).postDataJSON()).toMatchObject({
+   method: 'POST', url: 'https://api.example.com/orders',
+   headers: {'X-Team':'qa','Content-Type':'application/json'},
+ });
+ await expect(page.getByText('201 · 5 ms')).toBeVisible();
+ await page.getByRole('button',{name:'Show endpoint details'}).click();
  await page.getByRole('button',{name:'Inspect POST /orders',exact:true}).click();await page.getByRole('tab',{name:'Parameters & headers'}).click();await expect(page.getByText('X-Team',{exact:true}).first()).toBeVisible();await page.getByRole('tab',{name:'Request body',exact:true}).click();await expect(page.getByLabel('request object example')).toContainText('"name": "new"');
  await page.getByRole('tab',{name:/^Responses/}).click();await page.getByRole('button',{name:'400 Invalid order'}).click();await expect(page.getByLabel('response object example')).toContainText('Name required');
  await page.getByRole('button',{name:'Request review',exact:true}).click();await expect(page.getByRole('button',{name:'Approve',exact:true})).toBeEnabled();await page.getByRole('button',{name:'Approve',exact:true}).click();await expect(page.getByText('APPROVED',{exact:true})).toBeVisible();await page.getByRole('button',{name:'Edit as draft',exact:true}).click();await expect(page.getByText('DRAFT',{exact:true})).toBeVisible();

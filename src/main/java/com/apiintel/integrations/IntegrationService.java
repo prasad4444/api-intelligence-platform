@@ -32,6 +32,8 @@ public class IntegrationService {
   private final NetworkGuard guard;
   private final Set<String> hosts;
   private final String friday;
+  @Value("${platform.integration-private-hosts:}")
+  private String privateHosts = "";
 
   public IntegrationService(
     RecordStore s,
@@ -43,7 +45,10 @@ public class IntegrationService {
     store = s;
     vault = v;
     guard = g;
-    this.hosts = new HashSet<>(Arrays.asList(hosts.split(",")));
+    this.hosts = new HashSet<>();
+    for (String host : hosts.split(",")) {
+      if (!host.isBlank()) this.hosts.add(host.trim().toLowerCase(Locale.ROOT));
+    }
     this.friday = friday;
   }
 
@@ -81,7 +86,7 @@ public class IntegrationService {
   public ObjectNode save(ObjectNode c, String actor) {
     String type = c.path("authType").asText("NONE");
     if (
-      !Set.of("NONE", "BEARER", "BASIC", "API_KEY", "OAUTH2_CLIENT", "WINDOWS").contains(
+      !Set.of("NONE", "BEARER", "BASIC", "AUTHORIZATION", "JIRA_TOKEN", "API_KEY", "OAUTH2_CLIENT", "WINDOWS").contains(
         type
       )
     ) throw new IllegalArgumentException("Unsupported authentication type");
@@ -90,7 +95,18 @@ public class IntegrationService {
     ) throw new IllegalArgumentException(
       "Store credentials in the vault, then reference their name"
     );
-    target(c, "");
+    URI base = target(c, "");
+    if (Set.of("AUTHORIZATION", "JIRA_TOKEN").contains(type) && !"https".equals(base.getScheme())) {
+      throw new IllegalArgumentException("Use an HTTPS URL for this credential");
+    }
+    if (c.path("aiChatEnabled").asBoolean()) {
+      AiChat.request(c, "Connection configuration check");
+      target(c, c.path("chatPath").asText());
+    }
+    if (type.equals("JIRA_TOKEN") && (!c.path("provider").asText().equals("jira") ||
+        c.path("jiraEmail").asText().isBlank())) {
+      throw new IllegalArgumentException("Enter the Atlassian account email for a Jira Cloud API token");
+    }
     return store.save("integrations", c, actor);
   }
 
@@ -113,12 +129,18 @@ public class IntegrationService {
     boolean localFriday =
       c.path("provider").asText().equals("friday") && base.equals(friday);
     if (!localFriday) {
-      if (!hosts.contains(root.getHost())) throw new IllegalArgumentException(
+      if (!hosts.contains(root.getHost().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException(
         "Host must be enabled by INTEGRATION_HOSTS on the server"
       );
       if(c.path("authType").asText().equals("WINDOWS")) {
         if(windows==null)throw new IllegalArgumentException("Windows authentication transport is unavailable");
         windows.validate(c,root);
+      } else if (privateTarget(root)) {
+        try {
+          for (var address : InetAddress.getAllByName(root.getHost())) checkAddress(root, address);
+        } catch (UnknownHostException e) {
+          throw new IllegalArgumentException("Host cannot be resolved");
+        }
       } else guard.validate(base);
     } else if (
       !Set.of("http", "https").contains(root.getScheme())
@@ -133,6 +155,18 @@ public class IntegrationService {
     return uri;
   }
 
+  private boolean privateTarget(URI root) {
+    return "https".equals(root.getScheme()) && Arrays.stream(privateHosts.split(","))
+      .anyMatch(host -> host.trim().equalsIgnoreCase(root.getHost()));
+  }
+
+  private void checkAddress(URI root, InetAddress address) {
+    byte[] bytes = address.getAddress();
+    boolean privateUnicast = bytes.length == 4 && address.isSiteLocalAddress()
+      || bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
+    if (!privateTarget(root) || !privateUnicast) guard.check(address);
+  }
+
   private WebClient client(ObjectNode c) {
     boolean local =
       c.path("provider").asText().equals("friday") &&
@@ -141,9 +175,8 @@ public class IntegrationService {
       .followRedirect(false)
       .responseTimeout(Duration.ofSeconds(30))
       .doOnConnected(x -> {
-        if (!local) guard.check(
-          ((InetSocketAddress) x.channel().remoteAddress()).getAddress()
-        );
+        if (!local) checkAddress(URI.create(c.path("baseUrl").asText()),
+          ((InetSocketAddress) x.channel().remoteAddress()).getAddress());
       });
     return WebClient.builder()
       .clientConnector(new ReactorClientHttpConnector(http))
@@ -162,7 +195,9 @@ public class IntegrationService {
       "Add the credential in the vault first"
     );
     switch (type) {
-      case "BEARER" -> h.setBearerAuth(secret);
+      case "BEARER" -> h.setBearerAuth(secret.trim().replaceFirst("(?i)^Bearer +", ""));
+      case "AUTHORIZATION" -> h.set(HttpHeaders.AUTHORIZATION, secret.trim());
+      case "JIRA_TOKEN" -> h.setBasicAuth(c.path("jiraEmail").asText().trim(), secret.trim(), StandardCharsets.UTF_8);
       case "BASIC" -> h.set(
         "Authorization",
         "Basic " +
@@ -232,15 +267,18 @@ public class IntegrationService {
         .headers(h -> {
           auth(c, h);
           h.setContentType(MediaType.APPLICATION_JSON);
-          h.set("Accept", "application/json");
+          h.set("Accept", c.path("aiResponseFormat").asText().equals("sse")
+            ? "application/json, text/event-stream" : "application/json");
           if (c.path("provider").asText().equals("anthropic")) h.set(
             "anthropic-version",
             "2023-06-01"
           );
         });
-      String raw = request
-        .bodyValue(payload == null ? "" : payload.toString())
-        .retrieve()
+      var response = payload == null ? request.retrieve() : request.bodyValue(payload.toString()).retrieve();
+      String raw = response
+        .onStatus(HttpStatusCode::is3xxRedirection, r -> reactor.core.publisher.Mono.just(
+          new IllegalArgumentException("Provider redirected the request. Use the final API URL and verify the credential")
+        ))
         .bodyToMono(String.class)
         .defaultIfEmpty("{}")
         .block(Duration.ofSeconds(35));
@@ -250,11 +288,14 @@ public class IntegrationService {
         return TextNode.valueOf(raw);
       }
     } catch (WebClientResponseException e) {
-      throw new IllegalArgumentException(
-        "Provider returned HTTP " +
-          e.getStatusCode().value() +
-          "; verify credentials and scopes"
-      );
+      String advice = switch (e.getStatusCode().value()) {
+        case 401 -> "check the authorization scheme and replace expired credentials";
+        case 403 -> "check token scopes and the account's permissions";
+        case 404 -> "check the endpoint URL and API version";
+        case 429 -> "the provider rate limit was reached";
+        default -> "check the configured endpoint and request payload";
+      };
+      throw new IllegalArgumentException("Provider returned HTTP " + e.getStatusCode().value() + ". " + advice);
     } catch (IllegalArgumentException e) {
       throw e;
     } catch (Exception e) {
