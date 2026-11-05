@@ -69,7 +69,7 @@ The Postman-style workbench now includes request tabs, nested collections, param
 | Module | Available workflows |
 | --- | --- |
 | Dashboard | Contract, test, execution and integration KPIs; sprint delivery pulse |
-| API Workspace | OpenAPI 3 JSON/YAML import, operation browser, lint, recursive version diff, review/approval, collection generation, guarded GET try-it |
+| API Workspace | OpenAPI 3 JSON/YAML import, Swagger-style operation explorer, guarded Try it out, lint, full-file comparison, review/approval, collection generation |
 | Request Studio | HTTP methods, headers, JSON/XML/text/form bodies, ephemeral auth, environments, nested collections, v2.1 import/export, runner, history, curl snippet |
 | Test Library | Generated editable positive/negative/boundary/security drafts based on schema examples and bounded values; manual cases, search, type filter, clone, revisions, restore, selected-case and suite/plan runs, recorded results; JSON/CSV/Excel/Postman/JUnit/Cucumber exports |
 | GitHub | PAT via central vault, contents and PR browser; separately approved branch, file commit and PR actions; Jira key links |
@@ -94,7 +94,7 @@ Enable approved destination hosts on the server, for example:
 export INTEGRATION_HOSTS='api.github.com,api.devin.ai,api.openai.com,api.anthropic.com,your-instance.atlassian.net'
 ```
 
-Private destinations are blocked for generic requests and integrations. Friday is the exception: it can access only the exact server-configured `FRIDAY_URL`. The server checks DNS answers and the connected peer, refuses redirect following, caps buffered responses at 2 MB and applies timeouts. New connectors require no backend changes for ordinary JSON HTTP actions.
+Generic requests block private destinations. Connectors can use private HTTPS services when their exact host appears in both `INTEGRATION_HOSTS` and `INTEGRATION_PRIVATE_HOSTS`. The Friday daemon continues to use the exact server-configured `FRIDAY_URL`. The server checks DNS answers and the connected peer, refuses redirect following, caps buffered responses at 2 MB and applies timeouts.
 
 **Writes:** propose the exact method/path/body → inspect it in Approval queue → reviewer approves → authorized operator executes once. A changed connector revision invalidates its earlier approvals. Failure consumes the approval to avoid accidental duplicate writes; inspect provider state before proposing a retry. AI chat requests can incur provider charges and are initiated directly by the user.
 
@@ -106,7 +106,7 @@ See [integration recipes](docs/INTEGRATIONS.md) for GitHub, Devin, Jira, Friday 
 - Session authentication uses HttpOnly/SameSite=Strict cookies and CSRF-protected writes. No credentials are persisted in browser localStorage.
 - All connector use is checked against its `allowedRoles`; administrators have an override. Vault and connector changes are admin-only. Reviewers can approve actions.
 - Vault values use AES-256-GCM, fresh 96-bit IVs and secret-name authenticated data. The master key is external configuration, never saved in H2.
-- H2 console is disabled. API documentation is available at `/swagger-ui/index.html` after sign-in.
+- H2 console is disabled. API Workspace renders uploaded contracts with the platform's own Swagger-style explorer. The platform's OpenAPI JSON remains available at `/v3/api-docs` after sign-in.
 - Database defaults to `./data/platform.mv.db`. Stop the application before taking a file backup. Preserve the corresponding vault key securely; losing it makes credentials unrecoverable.
 - When exposing beyond localhost, terminate HTTPS at a trusted reverse proxy and enable secure cookies with `SERVER_SERVLET_SESSION_COOKIE_SECURE=true`. Use a managed secret store to inject deployment credentials.
 - Direct Request Studio credentials are ephemeral. Saved variable profiles encrypt their values in the vault; secret values are masked and resolved by the backend. Use Integration Hub for durable connector credentials. Avoid putting secrets in URL query strings, request bodies, test fixtures or versioned JSON records.

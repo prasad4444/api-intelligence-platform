@@ -1,6 +1,7 @@
 package com.apiintel.tests;
 
 import com.apiintel.integrations.IntegrationService;
+import com.apiintel.integrations.AiChat;
 import com.apiintel.store.RecordStore;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.*;
@@ -58,7 +59,10 @@ public class TestGenerationService {
     if(prompt.length()>180000)throw new IllegalArgumentException("Contract is too large for generation; split it into smaller APIs.");
     String protocol=config.path("testGenerationProtocol").asText(Set.of("openai","azure","anthropic","ollama").contains(config.path("provider").asText())?config.path("provider").asText():"custom-json");
     var payload=store.parse("{}");String path;
-    switch(protocol) {
+    if (config.path("aiChatEnabled").asBoolean()) {
+      payload = AiChat.request(config, prompt);
+      path = config.path("chatPath").asText();
+    } else switch(protocol) {
       case "openai", "azure" -> {payload.put("model",config.path("model").asText());payload.putArray("messages").addObject().put("role","user").put("content",prompt);path=config.path("chatPath").asText("/v1/chat/completions");}
       case "anthropic" -> {payload.put("model",config.path("model").asText());payload.put("max_tokens",12000);payload.putArray("messages").addObject().put("role","user").put("content",prompt);path=config.path("chatPath").asText("/v1/messages");}
       case "ollama" -> {payload.put("model",config.path("model").asText());payload.put("prompt",prompt);payload.put("stream",false);payload.put("format","json");path=config.path("chatPath").asText("/api/generate");}
@@ -67,7 +71,8 @@ public class TestGenerationService {
     }
     JsonNode response=integrations.call(config,"POST",path,payload,actor);
     String pointer=config.path("testResponsePointer").asText();
-    if(!pointer.isBlank())response=response.at(pointer);
+    if (config.path("aiChatEnabled").asBoolean()) response = AiChat.response(config, response);
+    else if(!pointer.isBlank())response=response.at(pointer);
     else if(response.has("choices"))response=response.path("choices").path(0).path("message").path("content");
     else if(response.has("response"))response=response.path("response");
     else if(response.path("content").isArray()) {var text=new StringBuilder();for(var block:response.path("content"))text.append(block.path("text").asText());response=TextNode.valueOf(text.toString());}

@@ -38,11 +38,29 @@ Use `https://api.github.com` and Bearer authentication with a fine-grained PAT i
 
 ## Jira
 
-Use `https://YOUR_INSTANCE.atlassian.net`, add that hostname to the server allowlist, and choose Basic authentication. The secret value is `email:api_token`. The Jira page runs JQL through `/rest/api/3/search/jql`. For Test issue creation, configure your site's Test issue type first, then propose `/rest/api/3/issue` through the action console using Jira's fields schema. Local stories are intentionally independent from live Jira until an approved action is executed.
+1. Add the Jira hostname to `INTEGRATION_HOSTS`. Use the exact Jira URL, including any Data Center context path.
+2. For Jira Cloud, choose `JIRA_TOKEN`, enter your Atlassian account email, and paste the profile API token in the credential field. Use `https://YOUR_INSTANCE.atlassian.net` for an unscoped token or `https://api.atlassian.com/ex/jira/CLOUD_ID` for a scoped token. For Data Center, select that deployment and use `BEARER` with the personal access token.
+3. Save and enable the connector. In Jira, choose it, click **Test Jira connection**, then run a JQL query. The connection check calls `myself`; search uses `/rest/api/3/search/jql` on Cloud and `/rest/api/2/search` on Data Center.
+
+Existing Cloud connections configured with Basic and an encrypted `email:api_token` still work. To create a Test issue, propose the matching version's `/issue` action through the approval queue.
+
+## Configurable AI request
+
+In Integration Hub, create or edit a connector for Friday, Stylus, Copilot or another provider and enable **Use a configurable AI request**. Paste the full HTTPS API URL. Choose `AUTHORIZATION` and paste the complete header **value**, for example `Bearer <token>`, into the credential field. The value is stored in the encrypted vault.
+
+Copy the request's JSON payload shape into the template. Replace the message text with `{{prompt}}` and remove any credentials from the URL and payload. For example:
+
+```json
+{"messages":[{"role":"user","content":"{{prompt}}"}],"stream":false}
+```
+
+Set a JSON pointer for the reply, such as `/choices/0/message/content`. For SSE, select the SSE format and supply the pointer to each text delta, such as `/choices/0/delta/content`. Save and enable the connection, then reopen it and click **Test saved AI connection**. The same connection can be selected in AI Copilot and, when enabled there, in Test Library.
+
+Use a request the service permits from a server client. A browser token can expire or depend on cookies, device state, or additional headers. A compatible API or approved gateway is required when URL, Authorization, and JSON payload are insufficient.
 
 ## OpenAI-compatible / Azure / Anthropic / Ollama
 
-Specify the provider's base URL, model and credentials. OpenAI-compatible chat uses `/v1/chat/completions`. Azure uses the deployment-specific path and API version in `chatPath`, with `API_KEY` authentication and `api-key` header. Anthropic uses `x-api-key`, `/v1/messages`, and `anthropic-version: 2023-06-01`. Ollama uses `/api/generate`; private Ollama hosting needs a purpose-built deployment policy before enabling it—the generic integration guard blocks private targets. The local rule-based assistant always works without credentials.
+Specify the provider's base URL, model and credentials. OpenAI-compatible chat uses `/v1/chat/completions`. Azure uses the deployment-specific path and API version in `chatPath`, with `API_KEY` authentication and `api-key` header. Anthropic uses `x-api-key`, `/v1/messages`, and `anthropic-version: 2023-06-01`. Ollama uses `/api/generate`. For private HTTPS AI or Jira hosts, configure both `INTEGRATION_HOSTS` and `INTEGRATION_PRIVATE_HOSTS` and restart the backend. The local rule-based assistant always works without credentials.
 
 ## Friday
 

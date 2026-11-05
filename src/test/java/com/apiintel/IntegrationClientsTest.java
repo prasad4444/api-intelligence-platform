@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.apiintel.integrations.IntegrationService;
+import com.apiintel.integrations.IntegrationController;
+import com.apiintel.integrations.AiChat;
 import com.apiintel.network.NetworkGuard;
 import com.apiintel.security.Vault;
 import com.apiintel.store.RecordStore;
@@ -239,6 +241,53 @@ class IntegrationClientsTest {
         )
         .has("issues")
     );
+  }
+
+  @Test
+  void jiraProfileTokensAndDeploymentSpecificSearch() {
+    config.put("provider", "jira").put("authType", "JIRA_TOKEN").put("jiraEmail", "tester@example.com");
+    String basic = "Basic " + Base64.getEncoder().encodeToString(
+      "tester@example.com:mock-secret".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    server.stubFor(get(urlEqualTo("/rest/api/3/myself")).withHeader("Authorization", equalTo(basic))
+      .willReturn(okJson("{\"displayName\":\"Test Account\"}")));
+    server.stubFor(get(urlPathEqualTo("/rest/api/3/search/jql")).withHeader("Authorization", equalTo(basic))
+      .withQueryParam("jql", equalTo("project = DEMO")).willReturn(okJson("{\"issues\":[]}")));
+    config = store.save("integrations", config, "test");
+    String id = config.path("id").asText();
+    var controller = new IntegrationController(service, vault, store);
+    assertEquals(Map.of("displayName", "Test Account"), controller.checkJira(id, () -> "test"));
+    assertTrue(((JsonNode) controller.searchJira(id, Map.of("jql", "project = DEMO"), () -> "test")).has("issues"));
+
+    config.put("jiraDeployment", "data-center").put("authType", "BEARER");
+    vault.put("token", "Bearer mock-secret");
+    store.save("integrations", config, "test");
+    server.stubFor(get(urlPathEqualTo("/rest/api/2/search")).withHeader("Authorization", equalTo("Bearer mock-secret"))
+      .withQueryParam("jql", equalTo("project = DEMO")).willReturn(okJson("{\"issues\":[]}")));
+    assertTrue(((JsonNode) controller.searchJira(id, Map.of("jql", "project = DEMO"), () -> "test")).has("issues"));
+  }
+
+  @Test
+  void configuredAiChatSendsExactAuthorizationAndReadsSse() {
+    config.put("provider", "stylus").put("authType", "AUTHORIZATION").put("aiChatEnabled", true)
+      .put("chatPath", "/chat?version=2").put("aiResponseFormat", "sse").put("aiResponsePointer", "/delta");
+    config.set("aiRequestTemplate", store.parse("{\"input\":{\"message\":\"{{prompt}}\"},\"stream\":true}"));
+    vault.put("token", "Bearer captured-token");
+    config = store.save("integrations", config, "test");
+    server.stubFor(post(urlEqualTo("/chat?version=2"))
+      .withHeader("Authorization", equalTo("Bearer captured-token"))
+      .withRequestBody(equalToJson("{\"input\":{\"message\":\"Say \\\"hello\\\"\"},\"stream\":true}"))
+      .willReturn(aResponse().withHeader("Content-Type", "text/event-stream")
+        .withBody("data: {\"delta\":\"Hel\"}\n\ndata: {\"delta\":\"lo\"}\n\ndata: [DONE]\n\n")));
+    var controller = new IntegrationController(service, vault, store);
+    assertEquals(Map.of("response", TextNode.valueOf("Hello")), controller.ai(
+      config.path("id").asText(), store.parse("{}").put("prompt", "Say \"hello\""), () -> "test"));
+    assertFalse(config.toString().contains("captured-token"));
+
+    config.put("aiResponseFormat", "json").put("aiResponsePointer", "/result/text");
+    assertEquals("ok", AiChat.response(config, store.parse("{\"result\":{\"text\":\"ok\"}}")).asText());
+    assertThrows(IllegalArgumentException.class, () -> AiChat.response(config, store.parse("{}")));
+    config.put("chatPath", "/chat?access_token=secret");
+    assertThrows(IllegalArgumentException.class, () -> AiChat.request(config, "test"));
   }
 
   @Test

@@ -1,10 +1,11 @@
 import EndpointBrowser from "./EndpointBrowser";
+import SwaggerPreview from "./SwaggerPreview";
 import ContractCompare from "./ContractCompare";
 import { listOperations } from "./endpoint-model";
 import TestGeneration from "./TestGeneration";
 import { exportDrawio, importDrawio } from "./drawio";
 import { parseCurl, snippet as makeSnippet, safeRegex } from "./request-tools";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus,
   Play,
@@ -62,22 +63,23 @@ export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageP
     [actionBusy,setActionBusy] = useState(false),
     [actionMessage,setActionMessage] = useState(""),
     [collectionReady,setCollectionReady] = useState(false),
+    [showEndpointDetails, setShowEndpointDetails] = useState(false),
     [url, setUrl] = useState("https://httpbin.org/get");
   useEffect(() => {
     setSource(spec?.source || (spec?.document ? yaml.dump(spec.document) : initialSpec));
   }, [spec?.id, spec?.revision]);
-  let preview: Row | undefined;
-  let sourceError = "";
-  try {
-    const parsed = yaml.load(source) as Row;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
-        !String(parsed.openapi || "").startsWith("3.") ||
-        !parsed.paths || typeof parsed.paths !== "object" || Array.isArray(parsed.paths))
-      throw new Error("An OpenAPI 3 document with a paths object is required.");
-    preview = parsed;
-  } catch (e) {
-    sourceError = String(e);
-  }
+  const { preview, sourceError } = useMemo(() => {
+    try {
+      const parsed = yaml.load(source) as Row;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+          !String(parsed.openapi || "").startsWith("3.") ||
+          !parsed.paths || typeof parsed.paths !== "object" || Array.isArray(parsed.paths))
+        throw new Error("An OpenAPI 3 document with a paths object is required.");
+      return { preview: parsed, sourceError: "" };
+    } catch (error) {
+      return { preview: undefined, sourceError: String(error) };
+    }
+  }, [source]);
   const operations=listOperations(preview);
   const dirty=!!spec&&(!preview||source!==(spec.source||(spec.document?yaml.dump(spec.document):initialSpec)));
   const canEdit=roles?roles.some(r=>["ROLE_ADMIN","ROLE_DEVELOPER"].includes(r)):true;
@@ -154,7 +156,7 @@ export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageP
             </button>
           </div>
         </Panel>
-        <Panel title="Endpoint preview">
+        <Panel title="Contract review">
           <h2>{preview?.info?.title || "Enter a valid API contract"}</h2>
           <p className="muted">
             Version {preview?.info?.version || "—"} · {operations.length} operations
@@ -167,7 +169,6 @@ export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageP
           </div>
           {dirty&&<p className="workspace-dirty-message">You are previewing unsaved YAML. Import as a new API or save the selected contract before using review and collection actions.</p>}
           {actionMessage&&<div className="workspace-action-message" aria-live="polite">{actionMessage}{collectionReady&&<button onClick={()=>setPage("Request Studio")}>Open Request Studio</button>}</div>}
-          <EndpointBrowser document={preview} onUseUrl={setUrl}/>
           <Field label="Try-it URL">
             <input value={url} onChange={(e) => setUrl(e.target.value)} />
           </Field>
@@ -188,6 +189,18 @@ export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageP
           </button>
         </Panel>
       </div>
+      <Panel
+        title="Endpoint preview"
+        action={<button aria-pressed={showEndpointDetails} onClick={() => setShowEndpointDetails((show) => !show)}>
+          {showEndpointDetails ? "Show Swagger UI" : "Show endpoint details"}
+        </button>}
+      >
+        {showEndpointDetails
+          ? <EndpointBrowser document={preview} onUseUrl={setUrl} />
+          : preview
+            ? <SwaggerPreview document={preview} run={run} />
+            : <p className="muted">Enter a valid OpenAPI contract to open Swagger UI.</p>}
+      </Panel>
       <Panel title="Compare complete contract files"><ContractCompare source={source} document={preview} contracts={data.specs||[]} currentId={spec?.id}/></Panel>
       {result !== null && (
         <Panel title="Results">
@@ -742,11 +755,18 @@ export function Jira({ data, run, edit }: PageProps) {
   const [jql, setJql] = useState("project = DEMO ORDER BY updated DESC"),
     [result, setResult] = useState<unknown>(null),
     [selected, setSelected] = useState<string[]>([]),
+    [jiraId, setJiraId] = useState(""),
     [status, setStatus] = useState("To Do");
-  const connection = data.integrations?.find((c) => c.provider === "jira");
+  const connections = data.integrations?.filter((c) => c.provider === "jira") || [];
+  const connection = connections.find(c => c.id === jiraId) || connections.find(c => c.enabled) || connections[0];
   return (
     <>
       <Panel title="Jira search">
+        {connections.length > 0 && <Field label="Jira connection">
+          <select value={connection?.id || ""} onChange={event => setJiraId(event.target.value)}>
+            {connections.map(c => <option key={c.id} value={c.id}>{c.name}{c.enabled ? "" : " · disabled"}</option>)}
+          </select>
+        </Field>}
         <label className="button">
           Import CSV
           <input
@@ -773,16 +793,17 @@ export function Jira({ data, run, edit }: PageProps) {
             onClick={() =>
               run(async () =>
                 setResult(
-                  await post("/integrations/" + connection!.id + "/read", {
-                    path:
-                      "/rest/api/3/search/jql?jql=" + encodeURIComponent(jql),
-                  }),
+                  await post("/integrations/" + connection!.id + "/jira/search", { jql }),
                 ),
               )
             }
           >
             Run JQL
           </button>
+          <button disabled={!connection?.enabled} onClick={() => run(async () => {
+            const account = await post("/integrations/" + connection!.id + "/jira/check");
+            setResult({ connectedAs: account.displayName });
+          })}>Test Jira connection</button>
           <button
             onClick={() =>
               edit("stories", {
@@ -1057,6 +1078,8 @@ const providerDescriptions: Record<string, string> = {
   azure: "Azure-hosted AI deployments",
   ollama: "Local models using your server allowlist",
   friday: "Local spaces, chat and workflow signals",
+  stylus: "Stylus via a configured AI request",
+  copilot: "Microsoft Copilot via a configured AI request",
   custom: "Extend the workspace with any HTTP API",
 };
 export function Integrations({ data, run, edit }: PageProps) {
@@ -1591,7 +1614,7 @@ export function Copilot({ data, run }: PageProps) {
         role: assistant,
         text:
           response.choices?.[0]?.message?.content ||
-          response.response ||
+          (typeof response.response === "string" ? response.response : response.response !== undefined ? pretty(response.response) : "") ||
           pretty(response),
       },
     ]);
@@ -1611,7 +1634,7 @@ export function Copilot({ data, run }: PageProps) {
               </option>
               {data.integrations
                 ?.filter((c) =>
-                  ["openai", "azure", "ollama", "anthropic"].includes(
+                  c.aiChatEnabled || ["openai", "azure", "ollama", "anthropic"].includes(
                     c.provider,
                   ),
                 )
@@ -2050,6 +2073,12 @@ function ConnectorEditor({
     [credential, setCredential] = useState(""),
     [busy, setBusy] = useState(false),
     [diagnostic, setDiagnostic] = useState("");
+  const [aiUrl, setAiUrl] = useState(() => value.aiChatEnabled
+    ? (value.baseUrl || "").replace(/\/$/, "") + (value.chatPath || "") : "");
+  const [aiTemplate, setAiTemplate] = useState(() => pretty(value.aiRequestTemplate || {
+    messages: [{ role: "user", content: "{{prompt}}" }], stream: false,
+  }));
+  const [connectionTestPrompt, setConnectionTestPrompt] = useState("Reply with OK.");
   const set = (key: string, v: unknown) =>
     setConfig((c) => ({ ...c, [key]: v }));
   return (
@@ -2072,32 +2101,55 @@ function ConnectorEditor({
           <Field label="Provider">
             <select
               value={config.provider}
-              onChange={(e) => set("provider", e.target.value)}
+              onChange={(event) => {
+                const provider = event.target.value;
+                setConfig(current => ({
+                  ...current, provider,
+                  aiChatEnabled: provider === "jira" || provider === "github" ? false : current.aiChatEnabled,
+                  authType: provider === "jira" ? "JIRA_TOKEN" : current.authType === "JIRA_TOKEN" ? "BEARER" : current.authType,
+                }));
+                setCredential("");
+              }}
             >
               {Object.keys(providerDescriptions).map((p) => (
                 <option key={p}>{p}</option>
               ))}
             </select>
           </Field>
-          <Field label="Base URL">
+          {(!config.aiChatEnabled || config.provider === "jira") && <Field label={config.provider === "jira" ? "Jira site or API gateway URL" : "Base URL"}>
             <input
               value={config.baseUrl}
               onChange={(e) => set("baseUrl", e.target.value)}
             />
-          </Field>
+          </Field>}
           <Field label="Authentication">
             <select
               aria-label="Authentication"
               value={config.authType}
               onChange={(e) => {set("authType", e.target.value);setCredential("");setDiagnostic("");}}
             >
-              {["NONE", "BEARER", "BASIC", "API_KEY", "OAUTH2_CLIENT", "WINDOWS"].map(
+              {["NONE", "BEARER", "BASIC", "AUTHORIZATION", ...(config.provider === "jira" ? ["JIRA_TOKEN"] : []), "API_KEY", "OAUTH2_CLIENT", "WINDOWS"].map(
                 (a) => (
                   <option key={a}>{a}</option>
                 ),
               )}
             </select>
           </Field>
+          {config.provider === "jira" && <>
+            <Field label="Jira deployment">
+              <select value={config.jiraDeployment || "cloud"} onChange={event => {
+                const deployment = event.target.value;
+                setConfig(current => ({
+                  ...current, jiraDeployment: deployment, authType: deployment === "cloud" ? "JIRA_TOKEN" : "BEARER",
+                }));
+                setCredential("");
+              }}><option value="cloud">Jira Cloud</option><option value="data-center">Jira Data Center</option></select>
+            </Field>
+            {config.authType === "JIRA_TOKEN" && <Field label="Atlassian account email">
+              <input type="email" value={config.jiraEmail || ""} onChange={event => set("jiraEmail", event.target.value)} />
+            </Field>}
+            <p className="muted">Cloud profile API tokens use JIRA_TOKEN with your Atlassian email. For scoped Cloud tokens, use https://api.atlassian.com/ex/jira/CLOUD_ID. Data Center personal access tokens use BEARER.</p>
+          </>}
           <Field label="Secret reference">
             <input
               value={config.secretRef || ""}
@@ -2112,7 +2164,11 @@ function ConnectorEditor({
             <p className="muted">Optional per connection. Requires Windows curl.exe with SSPI, HTTPS and a server-configured WINDOWS_AUTH_HOSTS allowlist. The current account is the account running Spring Boot/IntelliJ, not a remote browser user's Windows account. Browser SSO and streaming are separate capabilities.</p>
             {config.id && <button type="button" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await post("/integrations/"+config.id+"/windows/check");setDiagnostic("Windows runtime ready. Destination login has not been tested. Use the connector read console to verify access.");}catch(e){setError(String(e));}finally{setBusy(false);}}}>Check saved Windows configuration</button>}
           </>}
-          {(config.authType !== "WINDOWS" || config.windowsUseCurrentUser === false) && <Field label={config.authType === "WINDOWS" ? "Windows password (encrypted in vault)" : "New credential (leave blank to keep existing)"}>
+          {(config.authType !== "WINDOWS" || config.windowsUseCurrentUser === false) && <Field label={
+            config.authType === "WINDOWS" ? "Windows password (encrypted in vault)" :
+            config.authType === "AUTHORIZATION" ? "Authorization header value (leave blank to keep existing)" :
+            config.authType === "JIRA_TOKEN" ? "Jira API token (leave blank to keep existing)" :
+            "New credential (leave blank to keep existing)"}>
             <input
               type="password"
               autoComplete="new-password"
@@ -2205,9 +2261,43 @@ function ConnectorEditor({
             </>
           )}
         </div>
+        {config.provider !== "jira" && config.provider !== "github" && <Panel title="AI request from Network tab">
+          <label><input type="checkbox" checked={!!config.aiChatEnabled} onChange={event => {
+            const enabled = event.target.checked;
+            setConfig(current => ({
+              ...current, aiChatEnabled: enabled,
+              authType: enabled && current.authType === "NONE" ? "AUTHORIZATION" : current.authType,
+            }));
+          }} /> Use a configurable AI request</label>
+          {config.aiChatEnabled && <>
+            <Field label="Full AI request URL"><input type="url" value={aiUrl} onChange={event => setAiUrl(event.target.value)} /></Field>
+            <Field label="AI request JSON template"><textarea className="code" value={aiTemplate} onChange={event => setAiTemplate(event.target.value)} /></Field>
+            <p className="muted">Use the request URL and JSON payload. Replace the message text with {"{{prompt}}"} and put the Authorization value in the encrypted credential field. If the response uses SSE, choose the JSON pointer for each text delta.</p>
+            <Field label="AI response format">
+              <select value={config.aiResponseFormat || "json"} onChange={event => set("aiResponseFormat", event.target.value)}>
+                <option value="json">JSON / text</option><option value="sse">Server-sent events (text deltas)</option>
+              </select>
+            </Field>
+            <Field label="AI response JSON pointer">
+              <input value={config.aiResponsePointer || ""} placeholder={config.aiResponseFormat === "sse" ? "/choices/0/delta/content" : "/choices/0/message/content"} onChange={event => set("aiResponsePointer", event.target.value)} />
+            </Field>
+            {value.id && value.enabled && value.aiChatEnabled && <div className="toolbar">
+              <input aria-label="AI test prompt" value={connectionTestPrompt} onChange={event => setConnectionTestPrompt(event.target.value)} />
+              <button type="button" disabled={busy} onClick={async () => {
+                setBusy(true); setError(""); setDiagnostic("");
+                try {
+                  const result = await post("/integrations/" + value.id + "/ai", { prompt: connectionTestPrompt });
+                  setDiagnostic("Provider responded. " + String(typeof result.response === "string" ? result.response : pretty(result.response)).slice(0, 240));
+                } catch (error) { setError(String(error)); }
+                finally { setBusy(false); }
+              }}>Test saved AI connection</button>
+            </div>}
+          </>}
+        </Panel>}
         <Panel title="AI test generation">
           <label><input type="checkbox" checked={!!config.testGenerationEnabled} onChange={e => set("testGenerationEnabled",e.target.checked)}/> Allow this connection to generate test drafts</label>
-          {config.testGenerationEnabled && <>
+          {config.testGenerationEnabled && config.aiChatEnabled && <p className="muted">Test generation uses the AI request template and response mapping above.</p>}
+          {config.testGenerationEnabled && !config.aiChatEnabled && <>
             <Field label="Test generation protocol"><select value={config.testGenerationProtocol || (["openai","azure","anthropic","ollama"].includes(config.provider) ? config.provider : "custom-json")} onChange={e=>set("testGenerationProtocol",e.target.value)}>
               <option value="openai">OpenAI-compatible JSON API</option><option value="azure">Azure OpenAI-compatible API</option><option value="anthropic">Anthropic Messages</option><option value="ollama">Ollama JSON API</option><option value="custom-json">Approved enterprise JSON gateway</option>
             </select></Field>
@@ -2269,17 +2359,30 @@ function ConnectorEditor({
             onClick={async () => {
               setBusy(true);
               try {
+                const next = { ...config };
+                if (next.aiChatEnabled) {
+                  const url = new URL(aiUrl.trim());
+                  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) {
+                    throw new Error("Enter an HTTP(S) AI endpoint without embedded credentials or a fragment");
+                  }
+                  next.baseUrl = url.origin;
+                  next.chatPath = url.pathname + url.search;
+                  next.aiRequestTemplate = JSON.parse(aiTemplate);
+                  if (!next.aiRequestTemplate || typeof next.aiRequestTemplate !== "object" ||
+                      Array.isArray(next.aiRequestTemplate) || !aiTemplate.includes("{{prompt}}")) {
+                    throw new Error("Enter a JSON object template containing {{prompt}}");
+                  }
+                }
                 if (credential && !(config.authType === "WINDOWS" && config.windowsUseCurrentUser !== false)) {
-                  if (!config.secretRef)
-                    throw new Error("Choose a secret reference");
+                  next.secretRef ||= "connector-" + crypto.randomUUID();
                   await request(
                     "/integrations/secrets/" +
-                      encodeURIComponent(config.secretRef),
+                      encodeURIComponent(next.secretRef),
                     { method: "PUT", body: pretty({ value: credential }) },
                   );
                   setCredential("");
                 }
-                await onSave(config);
+                await onSave(next);
                 onClose();
               } catch (e) {
                 setError(String(e));

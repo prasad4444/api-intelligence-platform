@@ -224,7 +224,301 @@ export default function RequestStudio({ data, reload, roles }: PageProps) {
     for(const profile of profiles){for(const value of profile.values)if(value.enabled&&value.key){if(profile.revision&&value.secret&&value.hasValue&&!value.value){vars[value.key]="{{"+value.key+"}}";deferred.push(value.key);}else vars[value.key]=value.value;}if(profile.scope==="global")Object.assign(vars,defaults);}
     return {variables:vars,deferred,profileIds:{...(globalProfile?.revision?{globalProfileId:globalProfile.id}:{}),...(profiles.find(p=>p.scope==="collection"&&p.revision)?{collectionProfileId:profiles.find(p=>p.scope==="collection")!.id}:{}),...(environment?.revision?{environmentId:environment.id}:{}),collectionId}};
   }
-  const {variables}=vari…3475 tokens truncated…nction addFolder() {
+  const {variables}=variableContext(draft.collectionId);
+  function requestPayload(d:Draft){const context=variableContext(d.collectionId);return {...buildRequest(d,context.variables,context.deferred),...context.profileIds};}
+  const updateProfile=(change:Partial<Profile>)=>setEnvs(old=>old.map(e=>e.id===editEnvId?{...e,...change}:e));
+  async function persistEnvironment(){if(!editingEnvironment)return;setSaving(true);setImportError("");try{const saved=await post("/environments",{...editingEnvironment,id:editingEnvironment.id==="local"?undefined:editingEnvironment.id});setEnvs(old=>[...old.filter(e=>e.id!==editingEnvironment.id),saved]);setEditEnvId(saved.id);if(saved.scope==="environment")setEnvId(saved.id);await reload();setNotice("Variable profile saved. Secret values are encrypted and resolved by the backend.");}catch(e){setImportError(String(e));}finally{setSaving(false);}}
+  async function removeEnvironment(){if(!editingEnvironment)return;if(!window.confirm("Delete this variable profile?"))return;setSaving(true);try{if(editingEnvironment.revision)await request("/environments/"+editingEnvironment.id,{method:"DELETE"});setEnvs(old=>old.filter(e=>e.id!==editingEnvironment.id));setEditEnvId("");if(envId===editingEnvironment.id)setEnvId("");await reload();}catch(e){setImportError(String(e));}finally{setSaving(false);}}
+  const [codeLanguage, setCodeLanguage] = useState("curl"),
+    [consoleOpen, setConsoleOpen] = useState(false);
+  const [logs, setLogs] = useState<{ time: string; message: string }[]>([]);
+  const [runner, setRunner] = useState<Row[]>([]),
+    [running, setRunning] = useState(false),
+    [iterations, setIterations] = useState(1),
+    [stopOnFailure, setStopOnFailure] = useState(false);
+  const controllers = useRef(new Map<string, AbortController>()),
+    runnerAbort = useRef(false);
+  const runnerController = useRef<AbortController | null>(null);
+  const current = responses[draft.id];
+  useEffect(
+    () => () => {
+      controllers.current.forEach((c) => c.abort());
+      runnerAbort.current = true;
+      runnerController.current?.abort();
+    },
+    [],
+  );
+  const patch = (changes: Partial<Draft>) =>
+    setTabs((old) =>
+      old.map((d) =>
+        d.id === draft.id ? { ...d, ...changes, dirty: true } : d,
+      ),
+    );
+  const addTab = (d = newDraft()) => {
+    setTabs((t) => [...t, d]);
+    setActive(d.id);
+    setError("");
+  };
+  const openItem = (item: Row, c: string, p: number[]) => {
+    const collection=data.collections?.find(row=>row.id===c);
+    if(collection?.sourceSpecId&&envId==="local"&&environment?.values.length===1&&environment.values[0].value==="https://httpbin.org"){setEnvId("");setNotice("Using this API collection's base URL. Select an environment to override it.");}
+
+    const existing = tabs.find(
+      (d) => d.collectionId === c && (item["x-studio-id"] ? d.itemKey === item["x-studio-id"] : pretty(d.itemPath) === pretty(p)),
+    );
+    if (existing) setActive(existing.id);
+    else addTab(readItem(item, c, p));
+  };
+  const closeTab = (id: string) => {
+    const closing = tabs.find((t) => t.id === id);
+    if (
+      closing?.dirty &&
+      !window.confirm("Discard unsaved changes to this request?")
+    )
+      return;
+    controllers.current.get(id)?.abort();
+    const rest = tabs.filter((t) => t.id !== id);
+    if (!rest.length) {
+      const d = newDraft();
+      setTabs([d]);
+      setActive(d.id);
+    } else {
+      setTabs(rest);
+      if (active === id) setActive(rest[rest.length - 1].id);
+    }
+    setResponses((old) => {
+      const next = { ...old };
+      delete next[id];
+      return next;
+    });
+  };
+  async function send() {
+    const snapshot = draft;
+    if (controllers.current.has(snapshot.id)) return;
+    setError("");
+    setNotice("");
+    const controller = new AbortController();
+    try {
+      const payload = requestPayload(snapshot);
+      controllers.current.set(snapshot.id, controller);
+      setSending((ids) => [...ids, snapshot.id]);
+      // Log method only; credentials and URLs may contain secrets.
+      setLogs((l) => [
+        ...l.slice(-99),
+        {
+          time: new Date().toLocaleTimeString(),
+          message: `${snapshot.method} request started`,
+        },
+      ]);
+      const result = await request("/client/send", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      const completed = {
+        ...result,
+        checks: evaluateChecks(snapshot.checks, result),
+      };
+      if (!controller.signal.aborted)
+        setResponses((old) => ({ ...old, [snapshot.id]: completed }));
+      setLogs((l) => [
+        ...l.slice(-99),
+        {
+          time: new Date().toLocaleTimeString(),
+          message: `${snapshot.method} completed · ${result.status} · ${result.durationMs} ms`,
+        },
+      ]);
+      await reload();
+    } catch (e) {
+      if (!controller.signal.aborted) setError(String(e));
+      else
+        setNotice(
+          "Request cancelled. The destination may already have processed it.",
+        );
+    } finally {
+      controllers.current.delete(snapshot.id);
+      setSending((ids) => ids.filter((id) => id !== snapshot.id));
+    }
+  }
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const saveRef = useRef(() => {});
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void sendRef.current();
+      }
+      if (e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+  function openSave() {
+    setTarget(draft.collectionId || data.collections?.[0]?.id || "");
+    setFolderPath([]);
+    setNewName(draft.name);
+    setDialog("Save request");
+    setImportError("");
+  }
+  saveRef.current = openSave;
+  function manage(action:string,collectionId:string,path:number[]|null,name:string){document.querySelectorAll(".rs-menu[open]").forEach(el=>el.removeAttribute("open"));setTarget(collectionId);setManagedRevision(data.collections?.find(c=>c.id===collectionId)?.revision);setManagedPath(path);setNewName(name);setMoveTo("[]");setImportError("");setDialog(action+(path===null?" collection":" item"));}
+  async function applyManagement(){const collection=data.collections?.find(c=>c.id===target);if(!collection)return;setSaving(true);setImportError("");try{
+    if(collection.revision!==managedRevision)throw new Error("The collection changed. Close this dialog and reopen the action before continuing.");
+    const action=dialog.split(" ")[0].toLowerCase();
+    if(managedPath===null){
+      if(action==="delete"){await request("/records/collections/"+collection.id,{method:"DELETE"});setTabs(old=>old.map(d=>d.collectionId===collection.id?{...d,collectionId:undefined,itemPath:undefined,itemKey:undefined,dirty:true}:d));}
+      if(action==="rename"){if(!newName.trim())throw new Error("Enter a collection name.");await save("collections",{...collection,name:newName.trim(),info:{...collection.info,name:newName.trim()}});}
+      if(action==="duplicate"){const copy={...collection,name:collection.name+" copy",info:{...collection.info,name:collection.name+" copy"},item:assignItemIds(collection.item||[],true)};for(const key of ["id","revision","updatedAt","sourceSpecId","sourceSpecRevision","sourceContractHash"])delete (copy as Row)[key];await save("collections",copy);}
+    }else{
+      const normalized=assignItemIds(collection.item||[]);const next=changeItems(normalized,action as "rename"|"duplicate"|"delete"|"move",managedPath,newName,JSON.parse(moveTo));
+      await save("collections",{...collection,item:next});const locations=itemLocations(next);
+      setTabs(old=>old.map(d=>{if(d.collectionId!==collection.id||!d.itemPath)return d;const key=d.itemKey||itemAt(normalized,d.itemPath)?.["x-studio-id"];const location=locations.find(x=>x.item["x-studio-id"]===key);return location?{...d,itemPath:location.path,itemKey:key,...(!d.dirty?{name:location.item.name}:{})}:{...d,collectionId:undefined,itemPath:undefined,itemKey:undefined,dirty:true};}));
+    }
+    await reload();setDialog("");setNotice(action==="delete"?"Deleted. Open requests are retained as unsaved tabs.":"Collection updated.");
+  }catch(e){setImportError(String(e));}finally{setSaving(false);}}
+  async function persistRequest() {
+    setSaving(true);
+    setImportError("");
+    const snapshot = { ...draft, name: newName.trim() || "Untitled request" };
+    try {
+      let collection = data.collections?.find((c) => c.id === target);
+      if (!collection)
+        collection = await save("collections", {
+          name: "My collection",
+          info: {
+            name: "My collection",
+            schema:
+              "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+          },
+          item: [],
+        });
+      const sameCollection=snapshot.collectionId===collection!.id;
+      const originalCollection=data.collections?.find(c=>c.id===snapshot.collectionId);
+      const originalItem=snapshot.itemKey?itemLocations(originalCollection?.item||[]).find(x=>x.item["x-studio-id"]===snapshot.itemKey)?.item:snapshot.itemPath?itemAt(originalCollection?.item||[],snapshot.itemPath):undefined;
+      let item={...originalItem,...serializedItem(sameCollection?snapshot:{...snapshot,itemKey:undefined,id:crypto.randomUUID()})};
+      if(sameCollection&&snapshot.itemKey){const current=itemLocations(collection!.item||[]).find(x=>x.item["x-studio-id"]===snapshot.itemKey);if(!current)throw new Error("This saved request was moved or deleted. Reopen it from the collection before saving.");snapshot.itemPath=current.path;}
+      let itemPath: number[], items: Row[];
+      if (snapshot.collectionId === collection!.id && snapshot.itemPath) {
+        itemPath = snapshot.itemPath;
+        items = replaceItem(collection!.item || [], itemPath, item);
+      } else {
+        const children = folderPath.reduce(
+          (node: Row[], i: number) => node[i]?.item || [],
+          collection!.item || [],
+        );
+        itemPath = [...folderPath, children.length];
+        const append = (nodes: Row[], path: number[]): Row[] =>
+          path.length
+            ? nodes.map((n, i) =>
+                i === path[0]
+                  ? { ...n, item: append(n.item || [], path.slice(1)) }
+                  : n,
+              )
+            : [...nodes, item];
+        items = append(collection!.item || [], folderPath);
+      }
+      await save("collections", { ...collection, item: items });
+      setTabs((old) =>
+        old.map((d) =>
+          d.id === snapshot.id
+            ? {
+                ...d,
+                name: snapshot.name,
+                collectionId: collection!.id,
+                itemPath,
+                itemKey:item["x-studio-id"],
+                dirty: false,
+              }
+            : d,
+        ),
+      );
+      await reload();
+      setDialog("");
+      setNotice(
+        "Request saved. Auth fields and recognized credential headers/query values are saved as variable references.",
+      );
+    } catch (e) {
+      setImportError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function importContent(text = importText) {
+    setImportError("");
+    setSaving(true);
+    try {
+      if (text.trim().startsWith("curl")) {
+        const parsed = parseCurl(text),
+          d = readItem({ name: "Imported curl", request: parsed });
+        const authKey = Object.keys(parsed.headers).find(
+          (k) => k.toLowerCase() === "authorization",
+        );
+        if (authKey && /^Bearer /i.test(parsed.headers[authKey])) {
+          d.auth = "bearer";
+          d.token = parsed.headers[authKey].slice(7);
+          d.headers = d.headers.filter((h) => h.key !== authKey);
+        }
+        addTab({ ...d, dirty: true });
+        setImportText("");
+        setDialog("");
+        setNotice("curl imported into a new request tab.");
+      } else {
+        const collection = JSON.parse(text);
+        if (
+          !collection.info?.schema?.includes("v2.1.0") ||
+          !Array.isArray(collection.item)
+        )
+          throw new Error(
+            "Paste a curl command or a Postman Collection v2.1 JSON document.",
+          );
+        const clean=sanitizeItems;
+        const saved = await save("collections", {
+          name: collection.info.name,
+          info: collection.info,
+          item: clean(collection.item),
+        });
+        await reload();
+        setTarget(saved.id);
+        setImportText("");
+        setDialog("");
+        setNotice(
+          "Collection imported. Credential fields use variable references.",
+        );
+      }
+    } catch (e) {
+      setImportError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function addCollection() {
+    if (!newName.trim()) return;
+    setSaving(true);
+    setImportError("");
+    try {
+      await save("collections", {
+        name: newName.trim(),
+        info: {
+          name: newName.trim(),
+          schema:
+            "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        item: [],
+      });
+      await reload();
+      setDialog("");
+    } catch (e) {
+      setImportError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function addFolder() {
     const c = data.collections?.find((c) => c.id === target);
     if (!c || !newName.trim()) return;
     setSaving(true);
