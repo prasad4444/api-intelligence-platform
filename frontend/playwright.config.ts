@@ -11,7 +11,7 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   webServer: {
     command:
-      'java -jar ../target/api-intelligence-platform-1.0.0-SNAPSHOT.jar --spring.datasource.url="jdbc:h2:mem:e2e;DB_CLOSE_DELAY=-1"',
+      'java -jar ../target/api-intelligence-platform-1.0.0-SNAPSHOT.jar --spring.datasource.url="jdbc:sqlite::memory:"',
     url: "http://127.0.0.1:8080",
     timeout: 60000,
     reuseExistingServer: !process.env.CI,

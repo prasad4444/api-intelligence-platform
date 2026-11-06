@@ -1,3 +1,4 @@
+import RequestDiagnostic from "./RequestDiagnostic";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Lock } from "lucide-react";
 import { post, pretty, type Row } from "./api";
@@ -29,12 +30,15 @@ function OperationDetails({ item, document, execution }: {
   const [result, setResult] = useState<Row>();
   const requirements = item.operation.security ?? document.security;
   const [environmentId, setEnvironmentId] = useState("");
+  const [supplemental, setSupplemental] = useState("none");
+  const [apiKeyHeader, setApiKeyHeader] = useState("X-API-Key");
   const [securityIndex, setSecurityIndex] = useState(0);
   const [credentials, setCredentials] = useState<Record<string, {secret?: string; username?: string}>>({});
   const [serverIndex, setServerIndex] = useState(0);
   const [error, setError] = useState("");
   const security = Array.isArray(requirements) ? requirements : [];
-  const schemes = Object.keys(object(security[securityIndex]));
+  const schemes = security.length === 0 && supplemental !== "none"
+    ? ["supplemental"] : Object.keys(object(security[securityIndex]));
   const profile = execution.profiles.find(entry => entry.id === environmentId);
   const variables: Row[] = (profile?.values || []).filter((entry: Row) => entry.enabled && entry.hasValue);
   const servers = operationServers(item, document);
@@ -68,6 +72,7 @@ function OperationDetails({ item, document, execution }: {
       const response = await post("/workspace/" + encodeURIComponent(spec.id) + "/operations/execute", {
         expectedRevision: spec.revision, operation: item.key, serverIndex, parameters: supplied,
         mediaType: media, body, environmentId, securityIndex, credentials,
+        ...(security.length === 0 && supplemental !== "none" ? {supplementalAuth: {type: supplemental, header: apiKeyHeader}} : {}),
       });
       setResult(response);
     } catch (e) {
@@ -121,12 +126,21 @@ function OperationDetails({ item, document, execution }: {
       {security.length > 0 && <label>Security alternative<select value={securityIndex} onChange={e => setSecurityIndex(Number(e.target.value))}>
         {security.map((alternative, index) => <option key={index} value={index}>{Object.keys(object(alternative)).join(" + ") || "Anonymous"}</option>)}
       </select></label>}
+      {security.length === 0 && <label>Credential override for undocumented authentication
+        <select value={supplemental} onChange={e => {setSupplemental(e.target.value);setCredentials({});}}>
+          <option value="none">None</option><option value="bearer">Bearer token</option>
+          <option value="basic">Basic authentication</option><option value="apiKey">API key header</option>
+        </select>
+      </label>}
+      {security.length === 0 && supplemental === "apiKey" && <label>API key header
+        <input value={apiKeyHeader} onChange={e => setApiKeyHeader(e.target.value)} />
+      </label>}
       {schemes.length > 0 && <label>Credential environment<select value={environmentId} onChange={e => {setEnvironmentId(e.target.value);setCredentials({});}}>
         <option value="">Select a saved environment</option>
         {execution.profiles.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
       </select></label>}
       {schemes.map(name => {
-        const scheme = resolve(document.components?.securitySchemes?.[name], document);
+        const scheme = security.length === 0 ? {scheme: supplemental} : resolve(document.components?.securitySchemes?.[name], document);
         return <fieldset key={name}><legend>{name} · {scheme.scheme || scheme.type || "unresolved"}</legend>
           {scheme.scheme === "basic" && <label>Username variable<select value={credentials[name]?.username || ""} onChange={e => updateCredential(name, "username", e.target.value)}>
             <option value="">Select variable</option>
@@ -145,6 +159,7 @@ function OperationDetails({ item, document, execution }: {
     <div className="swagger-section-bar"><h4>Responses</h4></div>
     {result && <div className="swagger-padded"><h4>Server response</h4>
       <p>{result.status || "Request failed"} · {result.durationMs} ms</p>
+      <RequestDiagnostic response={result} />
       <pre>{result.body || result.error}</pre>
       {result.headers && <details><summary>Response headers</summary><pre>{pretty(result.headers)}</pre></details>}
     </div>}

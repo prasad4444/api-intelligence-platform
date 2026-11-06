@@ -1,3 +1,4 @@
+import UsageHistory from "./UsageHistory";
 import EndpointBrowser from "./EndpointBrowser";
 import SwaggerPreview from "./SwaggerPreview";
 import { RevisionEvidence, RunComparison } from "./RevisionEvidence";
@@ -1817,7 +1818,7 @@ export function Copilot(props: PageProps) {
     </>
   );
 }
-export function Admin({ run }: PageProps) {
+export function Admin({ run, roles }: PageProps) {
   const [audit, setAudit] = useState<unknown>(null);
   return (
     <>
@@ -1858,7 +1859,7 @@ export function Admin({ run }: PageProps) {
             rows={[
               {
                 setting: "Database",
-                value: "File-based H2 with Flyway migrations",
+                value: "SQLite by default · schema managed with Flyway",
               },
               {
                 setting: "Credential encryption",
@@ -1882,6 +1883,7 @@ export function Admin({ run }: PageProps) {
           </p>
         </Panel>
       </div>
+      {(!roles || roles.includes("ROLE_ADMIN")) && <UsageHistory />}
       <Panel title="Audit trail">
         <button
           onClick={() => run(async () => setAudit(await request("/audit")))}

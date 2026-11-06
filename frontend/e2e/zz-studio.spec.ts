@@ -27,3 +27,37 @@ test('Windows authentication is optional and configurable per connector',async({
  await page.getByLabel('Authentication',{exact:true}).selectOption('WINDOWS');await expect(page.getByLabel('Windows protocol')).toHaveValue('NEGOTIATE');await expect(page.getByLabel('Windows identity')).toHaveValue('current');await expect(page.getByLabel('Windows password (encrypted in vault)')).toHaveCount(0);
  await page.getByLabel('Windows identity').selectOption('explicit');await expect(page.getByLabel('Windows username')).toBeVisible();await expect(page.getByLabel('Windows password (encrypted in vault)')).toBeVisible();await page.getByLabel('Windows protocol').selectOption('NTLM');await page.getByLabel('Authentication',{exact:true}).selectOption('BEARER');await expect(page.getByLabel('Windows protocol')).toHaveCount(0);await page.getByRole('button',{name:'Cancel',exact:true}).click();
 });
+
+test('Request Studio distinguishes upstream 401 from an expired platform session', async ({page}) => {
+  await login(page);
+  await page.locator('nav').getByRole('button',{name:'Request Studio',exact:true}).click();
+  await page.getByLabel('Request URL').fill('https://example.com/restricted');
+  await page.route('**/api/client/send', route => route.fulfill({json:{
+    status:401, durationMs:20, body:'Unauthorized', requestId:'upstream-fixture',
+    diagnostic:{reason:'upstream_unauthorized', authorization:'none', credentialHeader:false, challenge:'bearer', challengeError:'invalid_token'},
+  }}));
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await expect(page.getByText(/The target API returned 401/)).toBeVisible();
+  await expect(page.getByText('upstream-fixture',{exact:true})).toBeVisible();
+  await expect(page.getByText('invalid_token',{exact:true})).toBeVisible();
+
+  await page.unroute('**/api/client/send');
+  await page.route('**/api/client/send', route => route.fulfill({
+    status:401, headers:{'X-Platform-Failure':'platform_session_required','X-Request-ID':'platform-fixture'},
+  }));
+  await page.getByRole('button',{name:'Send',exact:true}).click();
+  await expect(page.getByText(/Your platform session is missing or expired.*platform-fixture/)).toBeVisible();
+});
+
+test('SQLite usage search retrieves a recorded platform request ID', async ({page}) => {
+  await login(page);
+  await page.locator('nav').getByRole('button',{name:'Admin',exact:true}).click();
+  await page.getByRole('button',{name:'Load usage',exact:true}).click();
+  const events = page.locator('.usage-table');
+  await expect(events.getByText('platform_session_required',{exact:true}).first()).toBeVisible();
+  const row = events.getByRole('row').filter({hasText:'platform_session_required'}).first();
+  const requestId = (await row.getByRole('button').textContent())!.trim();
+  await row.getByRole('button').click();
+  await expect(page.getByLabel('Usage request ID')).toHaveValue(requestId);
+  await expect(events.locator('tbody tr')).toHaveCount(1);
+});

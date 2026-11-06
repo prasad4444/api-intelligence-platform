@@ -1,5 +1,11 @@
 export type Row = Record<string, any>;
 let csrf = "";
+
+export class PlatformRequestError extends Error {
+  constructor(message: string, public readonly status: number, public readonly requestId: string | null) {
+    super(message + (requestId ? " · Request ID " + requestId : ""));
+  }
+}
 export async function request(path: string, options: RequestInit = {}) {
   if (!csrf) {
     const r = await fetch("/api/csrf");
@@ -23,7 +29,15 @@ export async function request(path: string, options: RequestInit = {}) {
       const e = await r.json();
       message = e.message || message;
     } catch {}
-    throw new Error(message);
+    const failure = r.headers.get("X-Platform-Failure");
+    if (failure === "platform_session_required") message = "Your platform session is missing or expired. Sign in and retry.";
+    else if (failure === "login_rejected") message = "Platform sign-in failed. Check your account and password.";
+    else if (failure === "platform_access_denied") message = "Your platform account does not have permission for this action.";
+    else if (failure === "csrf_missing" || failure === "csrf_invalid") {
+      resetCsrf();
+      message = "The platform security token is missing or stale. Retry the action.";
+    }
+    throw new PlatformRequestError(message, r.status, r.headers.get("X-Request-ID"));
   }
   if (r.status === 204 || r.headers.get("content-length") === "0") return null;
   const text = await r.text();

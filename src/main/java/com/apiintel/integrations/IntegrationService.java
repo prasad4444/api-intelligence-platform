@@ -1,6 +1,8 @@
 package com.apiintel.integrations;
 
 import com.apiintel.network.NetworkGuard;
+import com.apiintel.diagnostics.ApiRequestLog;
+import com.apiintel.diagnostics.OutboundLog;
 import com.apiintel.security.Vault;
 import com.apiintel.store.RecordStore;
 import com.fasterxml.jackson.databind.*;
@@ -19,6 +21,9 @@ import reactor.netty.http.client.HttpClient;
 
 @Service
 public class IntegrationService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private OutboundLog outbound = new OutboundLog();
+
 
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private org.springframework.context.ApplicationEventPublisher publisher;
@@ -294,18 +299,23 @@ public class IntegrationService {
     JsonNode payload,
     String actor
   ) {
-    if (!c.path("enabled").asBoolean()) throw new IllegalArgumentException(
-      "Connection is disabled"
-    );
-    var uri = target(c, path);
-    store.audit(actor, "integration:" + method, c.path("id").asText());
-    if(c.path("authType").asText().equals("WINDOWS")) {
-      if(windows==null)throw new IllegalArgumentException("Windows authentication transport is unavailable");
-      return windows.call(c,uri,method,payload);
+    URI uri = checkedTarget(c, path);
+    String verb = HttpMethod.valueOf(method).name();
+    String id = ApiRequestLog.requestId();
+    long started = System.nanoTime();
+    store.audit(actor, "integration:" + verb, c.path("id").asText());
+    if (c.path("authType").asText().equals("WINDOWS")) {
+      if (windows == null) throw new IllegalArgumentException("Windows authentication transport is unavailable");
+      return windows.call(c, uri, verb, payload);
     }
+
+    boolean dispatched = false;
     try {
       var credentials = new HttpHeaders();
       auth(c, credentials);
+      outbound.start("connector", verb, uri, OutboundLog.scheme(credentials.getFirst(HttpHeaders.AUTHORIZATION)),
+          OutboundLog.hasCredentialHeader(credentials), !credentials.isEmpty(), false);
+      dispatched = true;
       var request = client(c)
         .method(HttpMethod.valueOf(method))
         .uri(uri)
@@ -320,13 +330,11 @@ public class IntegrationService {
           );
         });
       var response = payload == null ? request.retrieve() : request.bodyValue(payload.toString()).retrieve();
-      String raw = response
-        .onStatus(HttpStatusCode::is3xxRedirection, r -> reactor.core.publisher.Mono.just(
-          new IllegalArgumentException("Provider redirected the request. Use the final API URL and verify the credential")
-        ))
-        .bodyToMono(String.class)
-        .defaultIfEmpty("{}")
-        .block(Duration.ofSeconds(35));
+      var entity = response.onStatus(HttpStatusCode::is3xxRedirection, ClientResponse::createException)
+        .toEntity(String.class).block(Duration.ofSeconds(35));
+      int status = entity.getStatusCode().value();
+      outbound.result(id, "connector", verb, uri, status, OutboundLog.challenge(entity.getHeaders()), started, OutboundLog.statusReason(status));
+      String raw = entity.getBody() == null ? "{}" : entity.getBody();
       for (var values : credentials.values()) for (String value : values) {
         if (value.isBlank()) continue;
         raw = redact(raw, value);
@@ -338,7 +346,11 @@ public class IntegrationService {
         return TextNode.valueOf(raw);
       }
     } catch (WebClientResponseException e) {
+      int status = e.getStatusCode().value();
+      outbound.result(id, dispatched ? "connector" : "connector-token", verb, uri, status,
+          OutboundLog.challenge(e.getHeaders()), started, OutboundLog.statusReason(status));
       String advice = switch (e.getStatusCode().value()) {
+        case 301, 302, 303, 307, 308 -> "use the final API URL and verify the credential";
         case 401 -> "check the authorization scheme and replace expired credentials";
         case 403 -> "check token scopes and the account's permissions";
         case 404 -> "check the endpoint URL and API version";
@@ -347,11 +359,22 @@ public class IntegrationService {
       };
       throw new IllegalArgumentException("Provider returned HTTP " + e.getStatusCode().value() + ". " + advice);
     } catch (IllegalArgumentException e) {
+      if (dispatched) outbound.result(id, "connector", verb, uri, 0, "none", started, OutboundLog.failure(e));
+      else outbound.rejected("connector", "connector_credential", e);
       throw e;
     } catch (Exception e) {
-      throw new IllegalArgumentException(
-        "Provider unavailable or request timed out"
-      );
+      outbound.result(id, dispatched ? "connector" : "connector-token", verb, uri, 0, "none", started, OutboundLog.failure(e));
+      throw new IllegalArgumentException("Provider request failed (" + OutboundLog.failure(e) + ")");
+    }
+  }
+
+  private URI checkedTarget(ObjectNode config, String path) {
+    try {
+      if (!config.path("enabled").asBoolean()) throw new IllegalArgumentException("Connection is disabled");
+      return target(config, path);
+    } catch (RuntimeException error) {
+      outbound.rejected("connector", "connector_destination", error);
+      throw error;
     }
   }
 
@@ -367,20 +390,33 @@ public class IntegrationService {
 
   public Flux<String> stream(ObjectNode c, String path, JsonNode payload) {
     if(c.path("authType").asText().equals("WINDOWS"))throw new IllegalArgumentException("Streaming is not supported with Windows authentication; use a JSON request or an approved API token gateway");
-    target(c, path);
-    if (!c.path("enabled").asBoolean()) throw new IllegalArgumentException(
-      "Connection is disabled"
-    );
-    return client(c)
-      .post()
-      .uri(target(c, path))
-      .headers(h -> auth(c, h))
-      .contentType(MediaType.APPLICATION_JSON)
-      .accept(MediaType.TEXT_EVENT_STREAM)
-      .bodyValue(payload.toString())
-      .retrieve()
-      .bodyToFlux(String.class)
-      .timeout(Duration.ofSeconds(60));
+    var uri = checkedTarget(c, path);
+    String id = ApiRequestLog.requestId();
+    var credentials = new HttpHeaders();
+    try {
+      auth(c, credentials);
+    } catch (RuntimeException error) {
+      outbound.rejected("connector-stream", "connector_credential", error);
+      throw error;
+    }
+    long started = System.nanoTime();
+    outbound.start("connector-stream", "POST", uri, OutboundLog.scheme(credentials.getFirst(HttpHeaders.AUTHORIZATION)),
+        OutboundLog.hasCredentialHeader(credentials), !credentials.isEmpty(), false);
+    return client(c).post().uri(uri).headers(h -> h.addAll(credentials))
+      .contentType(MediaType.APPLICATION_JSON).accept(MediaType.TEXT_EVENT_STREAM)
+      .bodyValue(payload.toString()).exchangeToFlux(response -> {
+        int status = response.statusCode().value();
+        outbound.result(id, "connector-stream", "POST", uri, status,
+            OutboundLog.challenge(response.headers().asHttpHeaders()), started, OutboundLog.statusReason(status));
+        return status >= 300
+          ? response.releaseBody().thenMany(Flux.error(new IllegalArgumentException("Provider returned HTTP " + status + " · Request ID " + id)))
+          : response.bodyToFlux(String.class);
+      }).timeout(Duration.ofSeconds(60))
+      .doOnError(error -> {
+        if (!(error instanceof IllegalArgumentException)) {
+          outbound.result(id, "connector-stream", "POST", uri, 0, "none", started, OutboundLog.failure(error));
+        }
+      });
   }
 
   public ObjectNode propose(String id, ObjectNode action, String actor) {

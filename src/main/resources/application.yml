@@ -8,8 +8,8 @@ server:
         same-site: strict
 spring:
   datasource:
-    url: ${DATABASE_URL:jdbc:h2:file:./data/platform;DB_CLOSE_ON_EXIT=FALSE}
-    username: sa
+    url: ${DATABASE_URL:jdbc:sqlite:./data/platform.sqlite}
+    username: ${DATABASE_USERNAME:sa}
     password: ${DATABASE_PASSWORD:}
   servlet:
     multipart:
@@ -32,3 +32,6 @@ platform:
   integration-private-hosts: ${INTEGRATION_PRIVATE_HOSTS:}
   windows-auth-hosts: ${WINDOWS_AUTH_HOSTS:}
   windows-curl: ${WINDOWS_CURL:curl.exe}
+logging:
+  level:
+    com.apiintel.diagnostics: ${APIINTEL_LOG_LEVEL:INFO}

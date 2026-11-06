@@ -1,5 +1,7 @@
 package com.apiintel.integrations;
 
+import com.apiintel.diagnostics.ApiRequestLog;
+import com.apiintel.diagnostics.OutboundLog;
 import com.apiintel.network.NetworkGuard;
 import com.apiintel.security.Vault;
 import com.fasterxml.jackson.databind.*;
@@ -14,6 +16,9 @@ import org.springframework.stereotype.Component;
 /** Optional native Windows SSPI transport. Never invokes a command shell. */
 @Component
 public class WindowsAuthTransport {
+  @org.springframework.beans.factory.annotation.Autowired
+  private OutboundLog outbound = new OutboundLog();
+
   private static final int LIMIT=2*1024*1024;
   private static final String STATUS="\n__APIINTEL_HTTP_STATUS__";
   private final Vault vault;
@@ -74,10 +79,20 @@ public class WindowsAuthTransport {
     if(method.equals("HEAD"))text.append("head\n");
     if(payload!=null&&!method.equals("HEAD"))text.append(option("data",payload.toString()));
     text.append(option("write-out",STATUS+"%{http_code}"));
-    var result=run(List.of(executable,"--disable","--config","-"),text.toString());
+    long started = System.nanoTime();
+    outbound.start("connector-windows", method, uri, "windows", false, true, false);
+    Output result;
+    try {
+      result = run(List.of(executable,"--disable","--config","-"),text.toString());
+    } catch (RuntimeException error) {
+      outbound.result(ApiRequestLog.requestId(), "connector-windows", method, uri, 0, "not_inspected", started, OutboundLog.failure(error));
+      throw error;
+    }
+    if (result.exit() != 0) outbound.result(ApiRequestLog.requestId(), "connector-windows", method, uri, 0, "not_inspected", started, "windows_curl_failed");
     if(result.exit()!=0)throw new IllegalArgumentException("Windows authentication request failed. Check VPN, certificate trust, account permissions and curl SSPI support.");
     int split=result.output().lastIndexOf(STATUS);if(split<0)throw new IllegalArgumentException("Windows connector returned an invalid response");
     int status;try{status=Integer.parseInt(result.output().substring(split+STATUS.length()).trim());}catch(NumberFormatException e){throw new IllegalArgumentException("Windows connector returned an invalid HTTP status");}
+    outbound.result(ApiRequestLog.requestId(), "connector-windows", method, uri, status, "not_inspected", started, OutboundLog.statusReason(status));
     if(status<200||status>=300)throw new IllegalArgumentException("Windows destination returned HTTP "+status+". Check its authentication protocol and account access; redirects are not followed.");
     String body=result.output().substring(0,split);if(body.isBlank())return JsonNodeFactory.instance.objectNode();
     try{return new ObjectMapper().readTree(body);}catch(Exception e){return TextNode.valueOf(body);}

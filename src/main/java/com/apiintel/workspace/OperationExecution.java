@@ -1,6 +1,7 @@
 package com.apiintel.workspace;
 
 import com.apiintel.network.RequestService;
+import com.apiintel.diagnostics.OutboundLog;
 import com.apiintel.store.RecordStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -14,6 +15,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class OperationExecution {
+  @org.springframework.beans.factory.annotation.Autowired
+  private OutboundLog outbound = new OutboundLog();
+
   private static final Set<String> METHODS = Set.of("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE");
   private final RecordStore store;
   private final RequestService requests;
@@ -24,6 +28,17 @@ public class OperationExecution {
   }
 
   public ObjectNode execute(String id, ObjectNode input, String actor) {
+    ObjectNode request;
+    try {
+      request = prepare(id, input);
+    } catch (RuntimeException error) {
+      outbound.rejected("contract-explorer", "contract_operation", error);
+      throw error;
+    }
+    return requests.send(request, actor, "contract-explorer");
+  }
+
+  private ObjectNode prepare(String id, ObjectNode input) {
     var spec = store.get("specs", id);
     if (!input.path("expectedRevision").isIntegralNumber()
         || !input.path("expectedRevision").equals(spec.path("revision"))) {
@@ -119,21 +134,38 @@ public class OperationExecution {
 
     addSecurity(document, operation, input, request, headers, query);
     request.put("url", base.replaceFirst("/$", "") + path + (query.isEmpty() ? "" : "?" + String.join("&", query)));
-    return requests.send(request, actor);
+    return request;
   }
 
   private void addSecurity(JsonNode document, JsonNode operation, ObjectNode input, ObjectNode request, ObjectNode headers, List<String> query) {
     var security = operation.has("security") ? operation.path("security") : document.path("security");
-    if (security.isEmpty()) return;
-    var alternative = security.path(input.path("securityIndex").asInt(0));
-    if (!alternative.isObject()) throw invalid("Select a documented security alternative");
-    if (alternative.isEmpty()) return;
+    var selectedSchemes = new LinkedHashMap<String, JsonNode>();
+    if (security.isEmpty()) {
+      var supplemental = input.path("supplementalAuth");
+      String type = supplemental.path("type").asText();
+      if (type.isBlank() || type.equals("none")) return;
+      var scheme = store.parse("{}");
+      switch (type) {
+        case "bearer", "basic" -> scheme.put("type", "http").put("scheme", type);
+        case "apiKey" -> scheme.put("type", "apiKey").put("in", "header").put("name", supplemental.path("header").asText());
+        default -> throw invalid("Choose a supported credential type");
+      }
+      selectedSchemes.put("supplemental", scheme);
+    } else {
+      var alternative = security.path(input.path("securityIndex").asInt(0));
+      if (!alternative.isObject()) throw invalid("Select a documented security alternative");
+      for (String name : iterable(alternative.fieldNames())) {
+        selectedSchemes.put(name, SpecService.resolveLocal(document.path("components").path("securitySchemes").path(name), document));
+      }
+    }
+    if (selectedSchemes.isEmpty()) return;
     String profile = input.path("environmentId").asText();
-    if (profile.isBlank()) throw invalid("Select a saved environment for this security alternative");
+    if (profile.isBlank()) throw invalid("Select a saved environment for this credential");
     var environment = store.get("environments", profile);
     request.put("environmentId", profile);
-    for (String name : iterable(alternative.fieldNames())) {
-      var scheme = SpecService.resolveLocal(document.path("components").path("securitySchemes").path(name), document);
+    for (var entry : selectedSchemes.entrySet()) {
+      String name = entry.getKey();
+      var scheme = entry.getValue();
       var selected = input.path("credentials").path(name);
       String secretKey = selected.path("secret").asText();
       boolean savedSecret = false;
@@ -146,7 +178,14 @@ public class OperationExecution {
       if (scheme.path("type").asText().equals("apiKey")) {
         String field = scheme.path("name").asText();
         switch (scheme.path("in").asText()) {
-          case "header" -> headers.put(field, secret);
+          case "header" -> {
+            if (!field.matches("[A-Za-z][A-Za-z0-9_-]{0,99}") ||
+                Set.of("host", "authorization", "proxy-authorization", "cookie", "connection", "content-length",
+                    "content-type", "transfer-encoding").contains(field.toLowerCase(Locale.ROOT))) {
+              throw invalid("Choose a dedicated API-key header name");
+            }
+            headers.put(field, secret);
+          }
           case "query" -> query.add(encode(field) + "=" + secret);
           default -> throw invalid("Cookie API keys are unavailable in this executor");
         }

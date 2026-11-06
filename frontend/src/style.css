@@ -1454,3 +1454,13 @@ tr:last-child td {
 .evidence-list button span:first-of-type { margin-left: auto; }
 .run-compare { margin-bottom: 14px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
 .run-compare summary { cursor: pointer; font-weight: 600; }
+
+.request-diagnostic { padding: 8px 12px; overflow-wrap: anywhere; }
+.request-diagnostic p { margin: 0 0 5px; }
+.request-diagnostic small { color: var(--muted); }
+
+.usage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 12px 0; }
+.usage-summary > div { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.usage-summary small { color: var(--muted); }
+.usage-summary strong { font-size: 18px; }
+.usage-table { overflow: auto; margin: 12px 0; }

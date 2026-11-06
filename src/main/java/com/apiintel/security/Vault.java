@@ -48,7 +48,16 @@ public class Vault {
         Base64.getEncoder().encodeToString(
           c.doFinal(value.getBytes(StandardCharsets.UTF_8))
         );
-      db.update("MERGE INTO secrets KEY(name) VALUES(?,?)", name, encrypted);
+      db.execute((org.springframework.jdbc.core.ConnectionCallback<Integer>) connection -> {
+        String sql = connection.getMetaData().getURL().startsWith("jdbc:sqlite:")
+          ? "INSERT INTO secrets(name,ciphertext) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET ciphertext=excluded.ciphertext"
+          : "MERGE INTO secrets KEY(name) VALUES(?,?)";
+        try (var statement = connection.prepareStatement(sql)) {
+          statement.setString(1, name);
+          statement.setString(2, encrypted);
+          return statement.executeUpdate();
+        }
+      });
     } catch (IllegalArgumentException e) {
       throw e;
     } catch (Exception e) {
