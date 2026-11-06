@@ -34,3 +34,11 @@ Collection menus include rename, duplicate, delete, add request/folder, and v2.1
 This does not claim complete Postman parity. Cross-collection moves, arbitrary Postman JavaScript, binary/multipart file handling, cloud monitors and real-time collaboration remain outside the implemented workbench. External AI generation remains an explicit, separately configured action.
 
 Saving an open request into a different collection creates a fresh request identity and retains its documented response examples. For a generated operation with one explicit success status, its initial Request Studio status assertion uses that documented code (for example 201 rather than a blanket 200); operations with multiple or unspecified success codes do not receive an invented single-status assertion.
+
+## Revision explorer and guarded execution
+
+API Workspace opens in Explore. Source keeps the original text, Changes opens the full comparison and revision evidence, and Governance shows contract workflow actions. Split source opens the editor beside Explore. Load revision history to inspect an older snapshot. Older revisions are read-only and execution uses the latest saved revision. A revision change resets request inputs and response evidence while preserving the selected operation when it still exists.
+
+Try it out uses the selected operation and server from the saved contract. Spring Boot builds the request and resolves credential references from a saved Request Studio environment scoped to the destination host. Configure secret variables there before selecting a security alternative. Bearer, Basic, and header/query API keys are supported, including pre-issued OAuth/OIDC bearer tokens. Supported requests include scalar path and header parameters, common query array styles and flat deepObject values, and JSON, XML, text and form-urlencoded bodies. Unsupported encodings or cookie requirements return a validation error before network execution.
+
+Changes shows linked collections, case coverage and recorded execution results for the selected revision. The exported review summary includes metadata and lint findings without request or response payloads. Test Library can compare two saved runs of the same case.

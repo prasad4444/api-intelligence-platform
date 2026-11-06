@@ -105,8 +105,13 @@ public class RequestService {
     }
     result.put("durationMs", (System.nanoTime() - start) / 1_000_000);
     result.put("method", method);
-    String safeUrl=uri.toString();
-    for(String secret:sensitive) {safeUrl=safeUrl.replace(secret,"REDACTED").replace(java.net.URLEncoder.encode(secret,java.nio.charset.StandardCharsets.UTF_8),"REDACTED").replace(java.net.URLEncoder.encode(secret,java.nio.charset.StandardCharsets.UTF_8).replace("+","%20"),"REDACTED");}
+    String safeUrl = redact(uri.toString(), sensitive);
+    if (!sensitive.isEmpty()) {
+      if (result.has("body")) result.put("body", redact(result.path("body").asText(), sensitive));
+      if (result.path("headers") instanceof ObjectNode headers) {
+        headers.fields().forEachRemaining(header -> header.setValue(TextNode.valueOf(redact(header.getValue().asText(), sensitive))));
+      }
+    }
     safeUrl=safeUrl.replaceAll("(?i)([?&](?:[^=&]*(?:token|secret|password|api[_-]?key)[^=&]*)=)[^&]*","$1REDACTED");
     result.put("url", safeUrl);
     var history = result.deepCopy();
@@ -114,5 +119,15 @@ public class RequestService {
     history.remove("headers");
     store.save("history", history, actor);
     return result;
+  }
+  private static String redact(String value, Set<String> secrets) {
+    for (String secret : secrets) {
+      String encoded = java.net.URLEncoder.encode(secret, java.nio.charset.StandardCharsets.UTF_8);
+      String quoted = TextNode.valueOf(secret).toString();
+      value = value.replace(secret, "REDACTED").replace(encoded, "REDACTED")
+        .replace(encoded.replace("+", "%20"), "REDACTED")
+        .replace(quoted.substring(1, quoted.length() - 1), "REDACTED");
+    }
+    return value;
   }
 }

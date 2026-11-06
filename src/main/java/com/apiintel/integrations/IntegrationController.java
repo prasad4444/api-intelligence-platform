@@ -140,45 +140,7 @@ public class IntegrationController {
     @RequestBody ObjectNode data,
     Principal p
   ) {
-    service.authorize(id);
-    var c = service.config(id);
-    String provider = c.path("provider").asText();
-    String prompt = data.path("prompt").asText();
-    if (prompt.length() > 20000) throw new IllegalArgumentException(
-      "Prompt is too large"
-    );
-    if (prompt.isBlank()) throw new IllegalArgumentException("Enter a prompt");
-    if (c.path("aiChatEnabled").asBoolean()) {
-      var response = service.call(c, "POST", c.path("chatPath").asText(), AiChat.request(c, prompt), p.getName());
-      return Map.of("response", AiChat.response(c, response));
-    }
-    var b = store.parse("{}");
-    b.put("model", c.path("model").asText(""));
-    String path;
-    switch (provider) {
-      case "openai", "azure" -> {
-        var m = b.putArray("messages").addObject();
-        m.put("role", "user");
-        m.put("content", prompt);
-        path = c.path("chatPath").asText("/v1/chat/completions");
-      }
-      case "anthropic" -> {
-        b.put("max_tokens", 1024);
-        var m = b.putArray("messages").addObject();
-        m.put("role", "user");
-        m.put("content", prompt);
-        path = "/v1/messages";
-      }
-      case "ollama" -> {
-        b.put("prompt", prompt);
-        b.put("stream", false);
-        path = "/api/generate";
-      }
-      default -> throw new IllegalArgumentException(
-        "Use the connector action editor for this provider"
-      );
-    }
-    return service.call(c, "POST", path, b, p.getName());
+    return service.chat(id, data.path("prompt").asText(), p.getName());
   }
 
   @PostMapping("/{id}/jira/check")

@@ -6,18 +6,48 @@ import "./endpoint-browser.css";
 const text=(v:unknown)=>typeof v==="string"?v:v==null?"":pretty(v);
 function Warning({node}:{node:Row}){return node["x-preview-warning"]?<p className="ep-warning">{node["x-preview-warning"]} <code>{node.$ref}</code></p>:null;}
 export function Schema({value,document,name="body",required=false,depth=0,trail=[]}:{value:unknown;document:Row;name?:string;required?:boolean;depth?:number;trail?:string[]}){
+ if (typeof value === "boolean") return <p className="ep-description">{value ? "Any value is allowed" : "No value is allowed"}</p>;
  const raw=object(value),s=resolve(value,document),ref=typeof raw.$ref==="string"?raw.$ref:"";
  if(depth>8||ref&&trail.includes(ref))return <div className="ep-schema-row"><code>{name}</code><span>Recursive schema <code>{ref}</code></span></div>;
  const next=ref?[...trail,ref]:trail;const children=Object.entries(object(s.properties));
  const type=Array.isArray(s.type)?s.type.join(" | "):s.type||(s.properties?"object":s.oneOf?"oneOf":s.anyOf?"anyOf":s.allOf?"allOf":"schema");
  return <div className="ep-schema-node"><div className="ep-schema-row"><code>{name}</code><span className="ep-type">{text(type)}{s.format?" · "+s.format:""}</span>{required&&<b className="ep-required">required</b>}{s.readOnly&&<span>read only</span>}{s.writeOnly&&<span>write only</span>}{(s.nullable||Array.isArray(s.type)&&s.type.includes("null"))&&<span>nullable</span>}{s.deprecated&&<span>deprecated</span>}</div>{s.description&&<p className="ep-description">{text(s.description)}</p>}<Warning node={s}/>{Object.keys(s).some(k=>["enum","minimum","maximum","exclusiveMinimum","exclusiveMaximum","minLength","maxLength","pattern","minItems","maxItems","default","additionalProperties"].includes(k))&&<div className="ep-constraints">{["enum","minimum","maximum","exclusiveMinimum","exclusiveMaximum","minLength","maxLength","pattern","minItems","maxItems","default","additionalProperties"].filter(k=>s[k]!==undefined).map(k=><span key={k}>{k}: <code>{text(s[k])}</code></span>)}</div>}{(children.length>0||s.items||s.allOf||s.oneOf||s.anyOf)&&<details open={depth<2}><summary>Fields and schema variants</summary><div className="ep-schema-children">{children.map(([key,v])=><Schema key={key} value={v} document={document} name={key} required={Array.isArray(s.required)&&s.required.includes(key)} depth={depth+1} trail={next}/>)}{s.items&&<Schema value={s.items} document={document} name="items[]" depth={depth+1} trail={next}/>}{["allOf","oneOf","anyOf"].map(kind=>Array.isArray(s[kind])&&s[kind].map((v:unknown,i:number)=><Schema key={kind+i} value={v} document={document} name={`${kind} · ${i+1}`} depth={depth+1} trail={next}/>))}</div></details>}</div>;
 }
-export function Media({content,document,mode}:{content:unknown;document:Row;mode:"request"|"response"}){
- const entries=Object.entries(object(content));const [selected,setSelected]=useState("");const [exampleName,setExampleName]=useState("");
- const mediaType=entries.some(([key])=>key===selected)?selected:entries[0]?.[0];const media=object(entries.find(([key])=>key===mediaType)?.[1]);
- const examples=mediaExamples(media,document,mode);const example=examples.find(e=>e.name===exampleName)||examples[0];
- if(!entries.length)return <p className="ep-empty">No {mode} body is defined for this response or operation.</p>;
- return <><div className="ep-section-heading"><h4>Content</h4><select aria-label={`${mode} content type`} value={mediaType} onChange={e=>{setSelected(e.target.value);setExampleName("");}}>{entries.map(([key])=><option key={key}>{key}</option>)}</select></div><div className="ep-section-heading"><h4>Schema</h4></div>{media.schema?<Schema value={media.schema} document={document}/>:<p className="ep-empty">No schema is defined for this media type.</p>}{example&&<><div className="ep-section-heading"><h4>{example.generated?"Generated schema example":"Documented example"}</h4>{examples.length>1&&<select aria-label={`${mode} example`} value={example.name} onChange={e=>setExampleName(e.target.value)}>{examples.map(e=><option key={e.name}>{e.name}</option>)}</select>}</div><pre className="ep-example" aria-label={`${mode} object example`}>{typeof example.value==="string"?example.value:pretty(example.value)}</pre>{example.generated&&<p className="ep-caption">Illustrative values generated from the schema. This is not a live response.</p>}</>}{media.encoding&&<details className="ep-extra"><summary>Encoding definitions</summary><pre className="ep-example">{pretty(media.encoding)}</pre></details>}</>;
+export function Media({content, document, mode, tabs = false}: {
+  content: unknown; document: Row; mode: "request" | "response"; tabs?: boolean;
+}) {
+  const entries = Object.entries(object(content));
+  const [selected, setSelected] = useState("");
+  const [exampleName, setExampleName] = useState("");
+  const [view, setView] = useState("Example Value");
+  const mediaType = entries.some(([key]) => key === selected) ? selected : entries[0]?.[0];
+  const media = object(entries.find(([key]) => key === mediaType)?.[1]);
+  const examples = mediaExamples(media, document, mode);
+  const example = examples.find(entry => entry.name === exampleName) || examples[0];
+  if (!entries.length) return <p className="ep-empty">No {mode} body is defined for this response or operation.</p>;
+  return <>
+    <div className="ep-section-heading"><h4>Content</h4>
+      <select aria-label={mode + " content type"} value={mediaType} onChange={event => {setSelected(event.target.value);setExampleName("");}}>
+        {entries.map(([key]) => <option key={key}>{key}</option>)}
+      </select>
+    </div>
+    {tabs && <div className="swagger-media-tabs" aria-label={mode + " representation"}>
+      {["Example Value", "Schema"].map(label => <button type="button" key={label} aria-pressed={view === label}
+        onClick={() => setView(label)}>{label}</button>)}
+    </div>}
+    {(!tabs || view === "Schema") && (media.schema !== undefined
+      ? <Schema value={media.schema} document={document} />
+      : <p className="ep-empty">No schema is defined for this media type.</p>)}
+    {(!tabs || view === "Example Value") && (example ? <>
+      <div className="ep-section-heading"><h4>{example.generated ? "Generated schema example" : "Documented example"}</h4>
+        {examples.length > 1 && <select aria-label={mode + " example"} value={example.name}
+          onChange={event => setExampleName(event.target.value)}>{examples.map(entry => <option key={entry.name}>{entry.name}</option>)}</select>}
+      </div>
+      <pre className="ep-example" aria-label={mode + " object example"}>{typeof example.value === "string" ? example.value : pretty(example.value)}</pre>
+      {example.generated && <p className="ep-caption">Illustrative values generated from the schema.</p>}
+    </> : <p className="ep-empty">No example is defined for this media type.</p>)}
+    {media.encoding && <details className="ep-extra"><summary>Encoding definitions</summary><pre className="ep-example">{pretty(media.encoding)}</pre></details>}
+  </>;
 }
 function Parameters({parameters,document}:{parameters:Row[];document:Row}){
  return <>{["path","query","header","cookie"].map(location=>{const rows=parameters.filter(p=>p.in===location);return rows.length?<section className="ep-parameter-group" key={location}><h4>{location==="header"?"Request headers":location[0].toUpperCase()+location.slice(1)+" parameters"} <span>{rows.length}</span></h4>{rows.map((p,i)=><details className="ep-parameter" key={String(p.name)+i} open><summary><code>{text(p.name)}</code><span className="ep-type">{text(resolve(p.schema,document).type)||"schema"}</span>{(p.required||location==="path")&&<b className="ep-required">required</b>}{p.deprecated&&<span>deprecated</span>}</summary>{p.description&&<p className="ep-description">{text(p.description)}</p>}{p.example!==undefined&&<pre className="ep-example">{text(p.example)}</pre>}{p.examples&&<details><summary>Parameter examples</summary><pre className="ep-example">{pretty(p.examples)}</pre></details>}{p.schema&&<Schema value={p.schema} document={document} name={String(p.name)}/>}<Warning node={p}/>{p.content&&<Media content={p.content} document={document} mode="request"/>}{(p.style||p.explode!==undefined)&&<p className="ep-caption">Style: {p.style||"default"} · Explode: {String(p.explode??"default")}</p>}</details>)}</section>:null;})}{parameters.filter(p=>!p.in).map((p,i)=><Warning key={i} node={p}/>)}{!parameters.length&&<p className="ep-empty">No path, query, cookie or custom header parameters are defined. Authentication headers are described under Authentication.</p>}</>;

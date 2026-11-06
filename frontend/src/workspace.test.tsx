@@ -19,6 +19,7 @@ const setup = (selected: any = spec) => {
   const selectSpec = vi.fn();
   const run = vi.fn(async (fn: () => Promise<unknown>) => fn());
   const view = render(<Workspace spec={selected} data={{specs: [selected]}} run={run} edit={vi.fn()} reload={vi.fn()} setPage={vi.fn()} selectSpec={selectSpec} />);
+  fireEvent.click(screen.getByText("Split source"));
   return { ...view, selectSpec };
 };
 describe("contract workspace", () => {
@@ -69,7 +70,7 @@ describe("contract workspace", () => {
 });
 describe("workspace action buttons",()=>{
  const selected={...spec,status:"DRAFT"};
- function actions(current=selected,roles=["ROLE_ADMIN"]){const setPage=vi.fn();render(<Workspace spec={current} data={{specs:[current]}} run={async fn=>fn()} edit={vi.fn()} reload={vi.fn()} setPage={setPage} roles={roles}/>);return setPage;}
+ function actions(current=selected,roles=["ROLE_ADMIN"]){const setPage=vi.fn();render(<Workspace spec={current} data={{specs:[current]}} run={async fn=>fn()} edit={vi.fn()} reload={vi.fn()} setPage={setPage} roles={roles}/>);fireEvent.click(screen.getByText("Split source"));return setPage;}
  it("requests review with the selected saved revision",async()=>{vi.mocked(post).mockResolvedValue({...selected,status:"IN_REVIEW"});actions();fireEvent.click(screen.getByText("Request review"));await waitFor(()=>expect(post).toHaveBeenCalledWith("/workspace/old/approval",{status:"IN_REVIEW",expectedRevision:3}));});
  it("persists edit-as-draft instead of merely replacing editor text",async()=>{vi.mocked(post).mockResolvedValue(selected);actions({...selected,status:"APPROVED"});fireEvent.click(screen.getByText("Edit as draft"));await waitFor(()=>expect(post).toHaveBeenCalledWith("/workspace/old/draft",{expectedRevision:3}));});
  it("blocks stale unsaved YAML and hides unauthorized approval capability",()=>{actions({...selected,status:"IN_REVIEW"},["ROLE_DEVELOPER"]);expect(screen.getByText("Approve")).toBeDisabled();fireEvent.change(screen.getByLabelText("OpenAPI source"),{target:{value:source}});expect(screen.getByText("Create collection")).toBeDisabled();expect(screen.getByText("Edit as draft")).toBeDisabled();expect(post).not.toHaveBeenCalled();});

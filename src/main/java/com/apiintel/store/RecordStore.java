@@ -33,6 +33,7 @@ public class RecordStore {
     "diagrams",
     "integrations",
     "events",
+    "ai-drafts",
     "governance-runs"
   );
 
@@ -59,10 +60,11 @@ public class RecordStore {
   }
 
   public ObjectNode get(String kind, String id) {
-    return list(kind)
-      .stream()
-      .filter(x -> id.equals(x.path("id").asText()))
-      .findFirst()
+    check(kind);
+    return db.query(
+        "SELECT payload FROM records WHERE kind=? AND id=?",
+        (rs, row) -> parse(rs.getString(1)), kind, id
+      ).stream().findFirst()
       .orElseThrow(() ->
         new ResponseStatusException(HttpStatus.NOT_FOUND, "Record not found")
       );

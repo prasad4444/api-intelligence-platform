@@ -2,6 +2,7 @@ import {test,expect} from "@playwright/test";
 async function login(page:any){await page.goto('/');await page.getByLabel('Username').fill('admin');await page.getByLabel('Password',{exact:true}).fill('e2e-admin-password');await page.getByRole('button',{name:'Sign in'}).click();await expect(page.getByRole('heading',{name:'Dashboard',exact:true})).toBeVisible();}
 test('uploaded YAML generates linked cases suites and plans without inventing runs',async({page})=>{
  await login(page);await page.locator('nav').getByRole('button',{name:'API Workspace',exact:true}).click();
+ await page.getByRole('tab',{name:'Source',exact:true}).click();
  await page.getByLabel('OpenAPI source').fill("openapi: 3.0.3\ninfo:\n  title: Studio regression API\n  version: '1.0'\npaths:\n  /widgets:\n    get:\n      operationId: listWidgets\n      summary: List widgets\n      responses:\n        '200':\n          description: OK\n");
  await page.getByRole('button',{name:'Import contract',exact:true}).click();await expect(page.getByRole('status')).toContainText('Saved successfully');
  await page.locator('nav').getByRole('button',{name:'Test Library',exact:true}).click();await expect(page.getByText('Studio regression API',{exact:true})).toBeVisible();

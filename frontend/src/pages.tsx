@@ -1,11 +1,13 @@
 import EndpointBrowser from "./EndpointBrowser";
 import SwaggerPreview from "./SwaggerPreview";
+import { RevisionEvidence, RunComparison } from "./RevisionEvidence";
+import AiDraftReview, { supportsChat } from "./AiDraftReview";
 import ContractCompare from "./ContractCompare";
 import { listOperations } from "./endpoint-model";
 import TestGeneration from "./TestGeneration";
 import { exportDrawio, importDrawio } from "./drawio";
 import { parseCurl, snippet as makeSnippet, safeRegex } from "./request-tools";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useDeferredValue } from "react";
 import {
   Plus,
   Play,
@@ -57,20 +59,37 @@ paths:
         '200':
           description: Success
 `;
-export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageProps) {
-  const [source, setSource] = useState(initialSpec),
+export function Workspace({ data, spec, run, selectSpec, setPage, roles, explorerFocus }: PageProps) {
+  const [draft, setDraft] = useState<{key: string; source: string}>({key: "", source: initialSpec}),
     [result, setResult] = useState<unknown>(null),
     [actionBusy,setActionBusy] = useState(false),
     [actionMessage,setActionMessage] = useState(""),
     [collectionReady,setCollectionReady] = useState(false),
     [showEndpointDetails, setShowEndpointDetails] = useState(false),
-    [url, setUrl] = useState("https://httpbin.org/get");
-  useEffect(() => {
-    setSource(spec?.source || (spec?.document ? yaml.dump(spec.document) : initialSpec));
-  }, [spec?.id, spec?.revision]);
+    [url, setUrl] = useState("https://httpbin.org/get"),
+    [tab, setTab] = useState("Explore"),
+    [history, setHistory] = useState<{id: string; records: Row[]}>(),
+    [historical, setHistorical] = useState<Row>(),
+    [split, setSplit] = useState(false),
+    [operationFocus, setOperationFocus] = useState<{operation: string}>();
+  const active = historical?.id === spec?.id ? historical : spec;
+  const activeKey = String(active?.id || "") + ":" + String(active?.revision || 0);
+  const savedSource = active?.source || (active?.document ? yaml.dump(active.document) : initialSpec);
+  const isHistorical = !!active && active !== spec;
+  const source = !isHistorical && draft.key === activeKey ? draft.source : savedSource;
+  const setSource = (value: string) => setDraft({key: activeKey, source: value});
+  useEffect(() => { setHistorical(undefined); setHistory(undefined); }, [spec?.id]);
+  useEffect(() => { if (explorerFocus) {setTab("Explore");setShowEndpointDetails(false);setOperationFocus(undefined);} }, [explorerFocus]);
+  function openOperation(operation: string) {
+    setOperationFocus({operation});
+    setShowEndpointDetails(false);
+    setTab("Explore");
+  }
+  const deferredSource = useDeferredValue(source);
   const { preview, sourceError } = useMemo(() => {
+    if (source === savedSource && active?.document?.paths) return { preview: active.document as Row, sourceError: "" };
     try {
-      const parsed = yaml.load(source) as Row;
+      const parsed = yaml.load(deferredSource) as Row;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
           !String(parsed.openapi || "").startsWith("3.") ||
           !parsed.paths || typeof parsed.paths !== "object" || Array.isArray(parsed.paths))
@@ -79,96 +98,135 @@ export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageP
     } catch (error) {
       return { preview: undefined, sourceError: String(error) };
     }
-  }, [source]);
+  }, [source, deferredSource, savedSource, active?.document]);
+  const lastValid = useRef<{key: string; preview: Row} | undefined>(undefined);
+  useEffect(() => { if (preview && deferredSource === source) lastValid.current = {key: activeKey, preview}; }, [activeKey, preview, deferredSource, source]);
+  const display = preview || (lastValid.current?.key === activeKey ? lastValid.current.preview : undefined);
+  const previewReady = !!preview && (source === savedSource || deferredSource === source);
   const operations=listOperations(preview);
-  const dirty=!!spec&&(!preview||source!==(spec.source||(spec.document?yaml.dump(spec.document):initialSpec)));
+  const dirty = source !== savedSource;
   const canEdit=roles?roles.some(r=>["ROLE_ADMIN","ROLE_DEVELOPER"].includes(r)):true;
   const canApprove=roles?.some(r=>["ROLE_ADMIN","ROLE_REVIEWER"].includes(r))??false;
   const canCollect=roles?roles.some(r=>["ROLE_ADMIN","ROLE_DEVELOPER","ROLE_TESTER"].includes(r)):true;
   async function action(kind:"draft"|"IN_REVIEW"|"APPROVED"|"collection") {
-    if(!spec)return;setActionBusy(true);setActionMessage("");setCollectionReady(false);
-    try{const saved=await run(()=>post("/workspace/"+spec.id+"/"+(kind==="draft"?"draft":kind==="collection"?"collection":"approval"),{expectedRevision:spec.revision,...(["IN_REVIEW","APPROVED"].includes(kind)?{status:kind}:{})}));if(saved){setActionMessage(kind==="collection"?`Collection ready: ${saved.name}. ${saved.item?.length||0} requests available in Request Studio.`:kind==="draft"?"Contract is now an editable draft.":kind==="IN_REVIEW"?"Review requested for the saved contract.":"Contract approved.");setCollectionReady(kind==="collection");}}
+    if(!spec || isHistorical)return;setActionBusy(true);setActionMessage("");setCollectionReady(false);
+    try{const saved=await run(()=>post("/workspace/"+spec.id+"/"+(kind==="draft"?"draft":kind==="collection"?"collection":"approval"),{expectedRevision:spec.revision,...(["IN_REVIEW","APPROVED"].includes(kind)?{status:kind}:{})}), kind === "collection" ? ["collections"] : ["specs"]);if(saved){setActionMessage(kind==="collection"?`Collection ready: ${saved.name}. ${saved.item?.length||0} requests available in Request Studio.`:kind==="draft"?"Contract is now an editable draft.":kind==="IN_REVIEW"?"Review requested for the saved contract.":"Contract approved.");setCollectionReady(kind==="collection");}}
     finally{setActionBusy(false);}
   }
   return (
     <>
-      <div className="two-cols contract-grid">
+      <div className="contract-header panel">
+        <div><small className="eyebrow">CONTRACT REVISION</small><h2>{active?.name || "New API contract"}</h2>
+          <span className="muted">{active?.version || "Draft"} · revision {active?.revision || "—"} · {operations.length} operations</span>
+        </div>
+        <div className="toolbar">
+          <Badge>{isHistorical ? "HISTORICAL" : spec?.status || "DRAFT"}</Badge>
+          <button disabled={!spec} onClick={() => spec && run(async () => {
+            const records = await request("/records/specs/" + encodeURIComponent(spec.id) + "/versions");
+            setHistory({id: spec.id, records});
+          }, [])}>Load revision history</button>
+          {history?.id === spec?.id && history && <select aria-label="Contract revision" value={isHistorical ? active?.revision : ""} onChange={e => {
+            setHistorical(history.records.find(record => String(record.revision) === e.target.value));
+          }}><option value="">Latest revision</option>
+            {history.records.filter(record => record.revision !== spec?.revision).map(record =>
+              <option key={record.revision} value={record.revision}>Revision {record.revision} · {record.version}</option>)}
+          </select>}
+          <label className="button"><Upload size={15} /> Upload & prepare
+            <input type="file" accept=".json,.yaml,.yml" hidden onChange={async e => {
+              const file = e.target.files?.[0]; e.target.value = "";
+              if (!file) return;
+              const uploaded = await file.text();
+              setSource(uploaded);
+              const saved = await run(() => post("/workspace/import", {source: uploaded}), ["specs"]);
+              if (saved) {selectSpec?.(saved.id);setTab("Explore");setActionMessage("Upload prepared: linked collection and test drafts are ready.");}
+            }} />
+          </label>
+        </div>
+      </div>
+      <div className="contract-nav toolbar" role="tablist" aria-label="Contract views">
+        {["Explore", "Source", "Changes", "Governance"].map(view =>
+          <button key={view} role="tab" aria-selected={tab === view} onClick={() => setTab(view)}>{view}</button>)}
+        {tab === "Explore" && <button className="contract-split" aria-pressed={split} onClick={() => setSplit(!split)}>Split source</button>}
+      </div>
+      {actionMessage && <div className="workspace-action-message" aria-live="polite">{actionMessage}{collectionReady&&<button onClick={()=>setPage("Request Studio")}>Open Request Studio</button>}</div>}
+      <div className={"contract-content" + (split && tab === "Explore" ? " contract-content-split" : "")}>
+      {(tab === "Source" || split && tab === "Explore") && <div className="contract-source">
         <Panel
           title="Contract workspace"
-          action={<Badge>{spec?.status || "DRAFT"}</Badge>}
         >
           <Field label="OpenAPI JSON or YAML">
             <textarea
               aria-label="OpenAPI source"
               className="code tall"
               value={source}
+              readOnly={isHistorical}
               onChange={(e) => setSource(e.target.value)}
             />
           </Field>
           {sourceError && <p role="alert" className="error">{sourceError}</p>}
           <p className="workspace-dirty-message">A file upload prepares all three modules automatically. Pasted edits preview immediately; import or save them to update collections and tests.</p>
           <div className="toolbar">
-            <label className="button">
-              <Upload size={15} /> Upload & prepare
-              <input
-                type="file"
-                accept=".json,.yaml,.yml"
-                hidden
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if(file){const uploaded=await file.text();setSource(uploaded);setActionMessage("");const saved=await run(()=>post("/workspace/import",{source:uploaded}));if(saved){selectSpec?.(saved.id);setActionMessage("Upload prepared: endpoint details, Request Studio collection, test cases, suites and plan are ready.");}}
-                }}
-              />
-            </label>
-            <button
-              onClick={() =>
-                run(async () =>
-                  setResult(await post("/workspace/lint", { source })),
-                )
-              }
-            >
-              Lint
-            </button>
             <button
               className="primary"
-              disabled={!preview}
+              disabled={!previewReady || isHistorical}
               onClick={() => run(async () => {
                 const saved = await post("/workspace/import", { source });
                 selectSpec?.(saved.id);
-                setActionMessage("Contract imported. Collection, cases, suites and plan are ready.");
+                setActionMessage("Contract imported. Collection, cases, suites and plan are ready.");setTab("Explore");
                 return saved;
-              })}
+              }, ["specs"])}
             >
               Import contract
             </button>
-            <button disabled={!preview || !spec}
+            <button disabled={!previewReady || !spec || isHistorical}
               onClick={() => run(async () => {
                 const saved = await save("specs", {
                   ...spec, source, document: preview, name: preview?.info?.title || "API",
                   version: preview?.info?.version || "1.0", status: "DRAFT",
                 });
                 selectSpec?.(saved.id);
-                setActionMessage("Contract saved. Collection and tests have been synchronized without overwriting earlier edits.");
+                setActionMessage("Contract saved. Linked collection and test drafts are ready.");setTab("Explore");
                 return saved;
-              })}>Save selected contract</button>
-            <button onClick={() => spec && setSource(spec.source||yaml.dump(spec.document || {}))}>
+              }, ["specs"])}>Save selected contract</button>
+            <button onClick={() => setSource(savedSource)}>
               Load selected
             </button>
           </div>
         </Panel>
+      </div>}
+      {tab === "Explore" && <div className="contract-explorer">
+      <Panel
+        title="Endpoint preview"
+        action={<button aria-pressed={showEndpointDetails} onClick={() => setShowEndpointDetails((show) => !show)}>
+          {showEndpointDetails ? "Show Swagger UI" : "Show endpoint details"}
+        </button>}
+      >
+        {dirty && <p className="workspace-dirty-message">Unsaved preview. Save this contract before running operations.</p>}
+        {sourceError && display && <p className="error">Showing last valid preview. Fix the source before executing.</p>}
+        {showEndpointDetails
+          ? <EndpointBrowser document={display} onUseUrl={setUrl} />
+          : display
+            ? <SwaggerPreview document={display} focus={operationFocus || explorerFocus} execution={{ spec: active, profiles: (data.environments || []).filter(p => p.scope === "environment"), enabled: !!spec && !isHistorical && !dirty && previewReady && canCollect }} />
+            : <p className="muted">Enter a valid OpenAPI contract to open Swagger UI.</p>}
+      </Panel>
+      </div>}
+      </div>
+      {tab === "Changes" && <Panel title="Compare complete contract files"><ContractCompare source={source} document={preview} contracts={data.specs||[]} currentId={spec?.id} onOperation={openOperation}/></Panel>}
+      {tab !== "Changes" && <div hidden={tab !== "Governance" && isHistorical}>
         <Panel title="Contract review">
           <h2>{preview?.info?.title || "Enter a valid API contract"}</h2>
           <p className="muted">
             Version {preview?.info?.version || "—"} · {operations.length} operations
           </p>
           <div className="toolbar">
-            <button disabled={!spec||dirty||actionBusy||!canEdit} title={dirty?"Save the current YAML first":"Return the selected saved contract to DRAFT"} onClick={()=>void action("draft")}>Edit as draft</button>
-            <button disabled={!spec||dirty||actionBusy||!canEdit||!["DRAFT","REJECTED"].includes(spec?.status||"DRAFT")} onClick={()=>void action("IN_REVIEW")}>Request review</button>
-            <button disabled={!spec||dirty||actionBusy||!canApprove||spec.status!=="IN_REVIEW"} title={!canApprove?"Reviewer or administrator role required":"Approve the contract currently in review"} onClick={()=>void action("APPROVED")}><Check size={15}/> Approve</button>
-            <button disabled={!spec||dirty||actionBusy||!canCollect} onClick={()=>void action("collection")}>Create collection</button>
+            <button disabled={!spec||isHistorical||dirty||actionBusy||!canEdit} title={dirty?"Save the current YAML first":"Return the selected saved contract to DRAFT"} onClick={()=>void action("draft")}>Edit as draft</button>
+            <button disabled={!spec||isHistorical||dirty||actionBusy||!canEdit||!["DRAFT","REJECTED"].includes(spec?.status||"DRAFT")} onClick={()=>void action("IN_REVIEW")}>Request review</button>
+            <button disabled={!spec||isHistorical||dirty||actionBusy||!canApprove||spec.status!=="IN_REVIEW"} title={!canApprove?"Reviewer or administrator role required":"Approve the contract currently in review"} onClick={()=>void action("APPROVED")}><Check size={15}/> Approve</button>
+            <button disabled={!spec||isHistorical||dirty||actionBusy||!canCollect} onClick={()=>void action("collection")}>Create collection</button>
           </div>
           {dirty&&<p className="workspace-dirty-message">You are previewing unsaved YAML. Import as a new API or save the selected contract before using review and collection actions.</p>}
-          {actionMessage&&<div className="workspace-action-message" aria-live="polite">{actionMessage}{collectionReady&&<button onClick={()=>setPage("Request Studio")}>Open Request Studio</button>}</div>}
+          <button onClick={() => run(async () => setResult(await post("/workspace/lint", {source})), [])}>Lint</button>
+          <details><summary>Standalone GET check</summary>
           <Field label="Try-it URL">
             <input value={url} onChange={(e) => setUrl(e.target.value)} />
           </Field>
@@ -187,26 +245,12 @@ export function Workspace({ data, spec, run, selectSpec, setPage, roles }: PageP
           >
             <Play size={15} /> Send GET
           </button>
+          </details>
         </Panel>
-      </div>
-      <Panel
-        title="Endpoint preview"
-        action={<button aria-pressed={showEndpointDetails} onClick={() => setShowEndpointDetails((show) => !show)}>
-          {showEndpointDetails ? "Show Swagger UI" : "Show endpoint details"}
-        </button>}
-      >
-        {showEndpointDetails
-          ? <EndpointBrowser document={preview} onUseUrl={setUrl} />
-          : preview
-            ? <SwaggerPreview document={preview} run={run} />
-            : <p className="muted">Enter a valid OpenAPI contract to open Swagger UI.</p>}
-      </Panel>
-      <Panel title="Compare complete contract files"><ContractCompare source={source} document={preview} contracts={data.specs||[]} currentId={spec?.id}/></Panel>
-      {result !== null && (
-        <Panel title="Results">
-          <JsonView value={result} />
-        </Panel>
-      )}
+      </div>}
+      {active && tab === "Changes" && <RevisionEvidence spec={active} collections={data.collections || []}
+        tests={data.tests || []} runs={data.runs || []} openOperation={openOperation} />}
+      {result !== null && <Panel title="Results"><JsonView value={result} /></Panel>}
     </>
   );
 }
@@ -455,6 +499,7 @@ export function TestLibrary({ data, spec, run, edit, reload }: PageProps) {
         </Panel>
       ) : tab === "Runs" ? (
         <Panel title="Execution history">
+          <RunComparison runs={(data.runs || []).filter(r => r.specId === spec?.id || visibleIds.has(r.caseId))} />
           <Records
             rows={(data.runs || []).filter(r => r.specId === spec?.id || visibleIds.has(r.caseId))}
             columns={["caseId", "caseRevision", "status", "updatedAt"]}
@@ -1082,6 +1127,14 @@ const providerDescriptions: Record<string, string> = {
   copilot: "Microsoft Copilot via a configured AI request",
   custom: "Extend the workspace with any HTTP API",
 };
+const connectorPresets: Record<string, Row> = {
+  "Microsoft 365 Copilot gateway": {provider:"copilot", authType:"AUTHORIZATION", aiChatEnabled:true, testGenerationEnabled:true},
+  "Internal Stylus gateway": {provider:"stylus", authType:"AUTHORIZATION", aiChatEnabled:true, testGenerationEnabled:true},
+  "Devin sessions": {provider:"devin", baseUrl:"https://api.devin.ai", authType:"BEARER"},
+  "OpenAI-compatible API": {provider:"openai", baseUrl:"https://api.openai.com", authType:"BEARER", chatPath:"/v1/chat/completions"},
+  "Anthropic Messages": {provider:"anthropic", baseUrl:"https://api.anthropic.com", authType:"API_KEY", headerName:"x-api-key"},
+  "Custom AI HTTP endpoint": {provider:"custom", authType:"AUTHORIZATION", aiChatEnabled:true, testGenerationEnabled:true},
+};
 export function Integrations({ data, run, edit }: PageProps) {
   const [connectionId, setConnectionId] = useState("");
   const [selected, setSelected] = useState<Row | null>(null),
@@ -1116,7 +1169,7 @@ export function Integrations({ data, run, edit }: PageProps) {
               baseUrl: "https://example.com",
               enabled: false,
               authType: "BEARER",
-              secretRef: "custom-token",
+              secretRef: "",
               allowedRoles: ["ADMIN"],
             })
           }
@@ -1124,6 +1177,15 @@ export function Integrations({ data, run, edit }: PageProps) {
           <Plus size={16} /> Add connector
         </button>
       </div>
+      <Panel title="Connector presets">
+        <div className="connector-presets">
+          {Object.entries(connectorPresets).map(([name, preset]) => <button key={name}
+            onClick={() => setSelected({ name, baseUrl:"", enabled:false, secretRef:"", allowedRoles:["ADMIN"], ...preset })}>
+            <PlugZap size={15} />{name}<ArrowRight size={14} />
+          </button>)}
+        </div>
+        <p className="muted">Copilot and Stylus use an approved gateway. Devin sessions are proposed through the action console and approval queue.</p>
+      </Panel>
       <div className="tabs">
         {["Connections", "Credential vault", "Approval queue"].map((t) => (
           <button
@@ -1583,7 +1645,8 @@ export function GitHubPage({ data, run }: PageProps) {
     </>
   );
 }
-export function Copilot({ data, run }: PageProps) {
+export function Copilot(props: PageProps) {
+  const { data, run } = props;
   const [provider, setProvider] = useState("fallback"),
     [assistant, setAssistant] = useState("API reviewer"),
     [promptText, setPrompt] = useState(
@@ -1621,6 +1684,7 @@ export function Copilot({ data, run }: PageProps) {
   }
   const friday = data.integrations?.find((c) => c.provider === "friday");
   return (
+    <>
     <div className="two-cols">
       <Panel title="AI workbench">
         <div className="two-cols compact">
@@ -1633,11 +1697,7 @@ export function Copilot({ data, run }: PageProps) {
                 Rule-based fallback · no credentials
               </option>
               {data.integrations
-                ?.filter((c) =>
-                  c.aiChatEnabled || ["openai", "azure", "ollama", "anthropic"].includes(
-                    c.provider,
-                  ),
-                )
+                ?.filter(supportsChat)
                 .map((c) => (
                   <option key={c.id} value={c.id} disabled={!c.enabled}>
                     {c.name} {c.enabled ? "" : "· disabled"}
@@ -1683,7 +1743,7 @@ export function Copilot({ data, run }: PageProps) {
           value={promptText}
           onChange={(e) => setPrompt(e.target.value)}
         />
-        <button className="primary" onClick={() => run(ask)}>
+        <button className="primary" onClick={() => run(ask, [])}>
           <Sparkles size={16} /> Ask assistant
         </button>
       </Panel>
@@ -1753,6 +1813,8 @@ export function Copilot({ data, run }: PageProps) {
         </button>
       </Panel>
     </div>
+    <AiDraftReview {...props} />
+    </>
   );
 }
 export function Admin({ run }: PageProps) {
