@@ -1,3 +1,5 @@
+import AiTools from "./AiTools";
+import { importAiCurl, exportAiCurl } from "./ai-curl";
 import UsageHistory from "./UsageHistory";
 import EndpointBrowser from "./EndpointBrowser";
 import SwaggerPreview from "./SwaggerPreview";
@@ -1126,10 +1128,12 @@ const providerDescriptions: Record<string, string> = {
   friday: "Local spaces, chat and workflow signals",
   stylus: "Stylus via a configured AI request",
   copilot: "Microsoft Copilot via a configured AI request",
+  "github-copilot": "GitHub Copilot via a configured company endpoint",
   custom: "Extend the workspace with any HTTP API",
 };
 const connectorPresets: Record<string, Row> = {
   "Microsoft 365 Copilot gateway": {provider:"copilot", authType:"AUTHORIZATION", aiChatEnabled:true, testGenerationEnabled:true},
+  "GitHub Copilot company gateway": {provider:"github-copilot", authType:"AUTHORIZATION", aiChatEnabled:true},
   "Internal Stylus gateway": {provider:"stylus", authType:"AUTHORIZATION", aiChatEnabled:true, testGenerationEnabled:true},
   "Devin sessions": {provider:"devin", baseUrl:"https://api.devin.ai", authType:"BEARER"},
   "OpenAI-compatible API": {provider:"openai", baseUrl:"https://api.openai.com", authType:"BEARER", chatPath:"/v1/chat/completions"},
@@ -1647,7 +1651,7 @@ export function GitHubPage({ data, run }: PageProps) {
   );
 }
 export function Copilot(props: PageProps) {
-  const { data, run } = props;
+  const { data, run, reload, spec, roles } = props;
   const [provider, setProvider] = useState("fallback"),
     [assistant, setAssistant] = useState("API reviewer"),
     [promptText, setPrompt] = useState(
@@ -1686,6 +1690,13 @@ export function Copilot(props: PageProps) {
   const friday = data.integrations?.find((c) => c.provider === "friday");
   return (
     <>
+    <AiTools data={data} spec={spec} roles={roles} renderEditor={(value, close, select) =>
+      <ConnectorEditor value={value} onClose={close} referencesOnly onSave={async config => {
+        const saved = await post("/integrations", config);
+        await reload(["integrations"]);
+        select(saved);
+      }} />}
+    />
     <div className="two-cols">
       <Panel title="AI workbench">
         <div className="two-cols compact">
@@ -2127,10 +2138,12 @@ function ConnectorEditor({
   value,
   onClose,
   onSave,
+  referencesOnly = false,
 }: {
   value: Row;
   onClose: () => void;
   onSave: (c: Row) => Promise<void>;
+  referencesOnly?: boolean;
 }) {
   const [config, setConfig] = useState<Row>({ ...value }),
     [error, setError] = useState(""),
@@ -2142,6 +2155,16 @@ function ConnectorEditor({
   const [aiTemplate, setAiTemplate] = useState(() => pretty(value.aiRequestTemplate || {
     messages: [{ role: "user", content: "{{prompt}}" }], stream: false,
   }));
+  const [aiHeaders, setAiHeaders] = useState(() => pretty(value.aiHeaders || {}));
+  const [stylusSetup, setStylusSetup] = useState("http");
+  const [curlTemplate, setCurlTemplate] = useState("");
+  function applyCurl(command: string) {
+    const imported = importAiCurl(command);
+    setAiUrl(imported.url);
+    setAiHeaders(pretty(imported.headers));
+    if (imported.body) setAiTemplate(imported.body);
+    setConfig(previous => ({ ...previous, aiMethod: imported.method, authType: imported.authType, secretRef: imported.secretRef }));
+  }
   const [connectionTestPrompt, setConnectionTestPrompt] = useState("Reply with OK.");
   const set = (key: string, v: unknown) =>
     setConfig((c) => ({ ...c, [key]: v }));
@@ -2221,6 +2244,7 @@ function ConnectorEditor({
               onChange={(e) => set("secretRef", e.target.value)}
             />
           </Field>
+          {referencesOnly && config.authType !== "NONE" && <p className="muted">Choose a reference from the Integration Hub vault. This editor only saves reference names.</p>}
           {config.authType === "WINDOWS" && <>
             <Field label="Windows protocol"><select aria-label="Windows protocol" value={config.windowsProtocol || "NEGOTIATE"} onChange={e=>set("windowsProtocol",e.target.value)}><option value="NEGOTIATE">Windows Negotiate (Kerberos / SSPI)</option><option value="NTLM">Windows NTLM</option></select></Field>
             <Field label="Windows identity"><select aria-label="Windows identity" value={config.windowsUseCurrentUser === false ? "explicit" : "current"} onChange={e=>{set("windowsUseCurrentUser",e.target.value==="current");setCredential("");setDiagnostic("");}}><option value="current">Use the application process Windows account</option><option value="explicit">Use a configured Windows username/password</option></select></Field>
@@ -2228,7 +2252,7 @@ function ConnectorEditor({
             <p className="muted">Optional per connection. Requires Windows curl.exe with SSPI, HTTPS and a server-configured WINDOWS_AUTH_HOSTS allowlist. The current account is the account running Spring Boot/IntelliJ, not a remote browser user's Windows account. Browser SSO and streaming are separate capabilities.</p>
             {config.id && <button type="button" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await post("/integrations/"+config.id+"/windows/check");setDiagnostic("Windows runtime ready. Destination login has not been tested. Use the connector read console to verify access.");}catch(e){setError(String(e));}finally{setBusy(false);}}}>Check saved Windows configuration</button>}
           </>}
-          {(config.authType !== "WINDOWS" || config.windowsUseCurrentUser === false) && <Field label={
+          {!referencesOnly && (config.authType !== "WINDOWS" || config.windowsUseCurrentUser === false) && <Field label={
             config.authType === "WINDOWS" ? "Windows password (encrypted in vault)" :
             config.authType === "AUTHORIZATION" ? "Authorization header value (leave blank to keep existing)" :
             config.authType === "JIRA_TOKEN" ? "Jira API token (leave blank to keep existing)" :
@@ -2335,7 +2359,50 @@ function ConnectorEditor({
           }} /> Use a configurable AI request</label>
           {config.aiChatEnabled && <>
             <Field label="Full AI request URL"><input type="url" value={aiUrl} onChange={event => setAiUrl(event.target.value)} /></Field>
-            <Field label="AI request JSON template"><textarea className="code" value={aiTemplate} onChange={event => setAiTemplate(event.target.value)} /></Field>
+            <div className="two-cols compact">
+              <Field label="AI request method"><select value={config.aiMethod || "POST"} onChange={event => set("aiMethod", event.target.value)}>
+                <option>POST</option><option>GET</option>
+              </select></Field>
+              <Field label="Read-only test path (same host)"><input placeholder="/health" value={config.aiProbePath || ""}
+                onChange={event => set("aiProbePath", event.target.value)} /></Field>
+            </div>
+            <Field label="Additional AI headers (JSON)">
+              <textarea className="code" rows={3} value={aiHeaders} onChange={event => setAiHeaders(event.target.value)} />
+            </Field>
+            <p className="muted">Use vault references for custom headers, for example {pretty({"X-Internal-Key":"{{vault:stylus-key}}"})}.</p>
+            {config.aiMethod !== "GET" && <Field label="AI request JSON template"><textarea className="code" value={aiTemplate} onChange={event => setAiTemplate(event.target.value)} /></Field>}
+            {config.provider === "stylus" && <>
+              <Field label="Stylus setup method"><select value={stylusSetup} onChange={event => setStylusSetup(event.target.value)}>
+                <option value="http">Direct HTTP</option><option value="curl">Redacted cURL / Bash template</option>
+              </select></Field>
+              {stylusSetup === "curl" && <>
+                <Field label="Redacted cURL template"><textarea className="code" rows={4} value={curlTemplate}
+                  placeholder="curl -X POST 'https://gateway.example.com/chat' …"
+                  onChange={event => setCurlTemplate(event.target.value)}
+                  onPaste={event => {
+                    event.preventDefault();
+                    setError("");
+                    try {
+                      const imported = importAiCurl(event.clipboardData.getData("text"));
+                      setCurlTemplate(exportAiCurl(imported.url, imported.method, imported.headers, imported.body, imported.authType, imported.secretRef));
+                    } catch (failure) { setError(String(failure)); }
+                  }} /></Field>
+                <div className="toolbar">
+                  <button type="button" onClick={() => {setError("");try {applyCurl(curlTemplate);} catch (failure) {setError(String(failure));}}}>Import cURL fields</button>
+                  <button type="button" onClick={() => {
+                    setError("");
+                    try {
+                      const generated = exportAiCurl(aiUrl, config.aiMethod || "POST", JSON.parse(aiHeaders), aiTemplate, config.authType, config.secretRef);
+                      importAiCurl(generated);
+                      setCurlTemplate(generated);
+                    } catch (failure) {setError(String(failure));}
+                  }}>Generate redacted cURL</button>
+                </div>
+                <p className="muted">Use placeholders like Bearer {"{{vault:stylus-token}}"} before pasting. Import reads HTTP fields only.</p>
+              </>}
+            </>}
+            {config.aiMethod !== "GET" && <label><input type="checkbox" checked={!!config.aiRequiresApproval}
+              onChange={event => set("aiRequiresApproval", event.target.checked)} /> Queue requests that create external tasks for approval</label>}
             <p className="muted">Use the request URL and JSON payload. Replace the message text with {"{{prompt}}"} and put the Authorization value in the encrypted credential field. If the response uses SSE, choose the JSON pointer for each text delta.</p>
             <Field label="AI response format">
               <select value={config.aiResponseFormat || "json"} onChange={event => set("aiResponseFormat", event.target.value)}>
@@ -2345,7 +2412,7 @@ function ConnectorEditor({
             <Field label="AI response JSON pointer">
               <input value={config.aiResponsePointer || ""} placeholder={config.aiResponseFormat === "sse" ? "/choices/0/delta/content" : "/choices/0/message/content"} onChange={event => set("aiResponsePointer", event.target.value)} />
             </Field>
-            {value.id && value.enabled && value.aiChatEnabled && <div className="toolbar">
+            {!referencesOnly && value.id && value.enabled && value.aiChatEnabled && !value.aiRequiresApproval && <div className="toolbar">
               <input aria-label="AI test prompt" value={connectionTestPrompt} onChange={event => setConnectionTestPrompt(event.target.value)} />
               <button type="button" disabled={busy} onClick={async () => {
                 setBusy(true); setError(""); setDiagnostic("");
@@ -2431,11 +2498,22 @@ function ConnectorEditor({
                   }
                   next.baseUrl = url.origin;
                   next.chatPath = url.pathname + url.search;
-                  next.aiRequestTemplate = JSON.parse(aiTemplate);
-                  if (!next.aiRequestTemplate || typeof next.aiRequestTemplate !== "object" ||
-                      Array.isArray(next.aiRequestTemplate) || !aiTemplate.includes("{{prompt}}")) {
-                    throw new Error("Enter a JSON object template containing {{prompt}}");
+                  next.aiMethod ||= "POST";
+                  next.aiHeaders = JSON.parse(aiHeaders);
+                  if (!next.aiHeaders || typeof next.aiHeaders !== "object" || Array.isArray(next.aiHeaders)) {
+                    throw new Error("Enter custom headers as a JSON object");
                   }
+                  if (next.aiMethod === "POST") {
+                    next.aiRequestTemplate = JSON.parse(aiTemplate);
+                    if (!next.aiRequestTemplate || typeof next.aiRequestTemplate !== "object" ||
+                        Array.isArray(next.aiRequestTemplate) || !aiTemplate.includes("{{prompt}}")) {
+                      throw new Error("Enter a JSON object template containing {{prompt}}");
+                    }
+                  } else {
+                    next.aiRequiresApproval = false;
+                    next.testGenerationEnabled = false;
+                  }
+                  if (next.aiRequiresApproval) next.testGenerationEnabled = false;
                 }
                 if (credential && !(config.authType === "WINDOWS" && config.windowsUseCurrentUser !== false)) {
                   next.secretRef ||= "connector-" + crypto.randomUUID();

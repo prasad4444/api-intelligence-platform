@@ -68,7 +68,10 @@ public class IntegrationService {
     if (prompt.length() > 180000) throw new IllegalArgumentException("Contract context is too large. Select a smaller scope");
     if (prompt.isBlank()) throw new IllegalArgumentException("Enter a prompt");
     if (c.path("aiChatEnabled").asBoolean()) {
-      var response = call(c, "POST", c.path("chatPath").asText(), AiChat.request(c, prompt), actor);
+      if (c.path("aiRequiresApproval").asBoolean()) throw new IllegalArgumentException("Use AI Tools to propose this task for approval");
+      String method = AiEndpointSettings.method(c);
+      var payload = method.equals("POST") ? AiChat.request(c, prompt) : null;
+      var response = call(c, method, c.path("chatPath").asText(), payload, actor, true);
       return store.parse("{}").set("response", AiChat.response(c, response));
     }
     var b = store.parse("{}");
@@ -148,8 +151,27 @@ public class IntegrationService {
       throw new IllegalArgumentException("Use an HTTPS URL for this credential");
     }
     if (c.path("aiChatEnabled").asBoolean()) {
-      AiChat.request(c, "Connection configuration check");
+      AiEndpointSettings.validate(c);
+      AiChat.validatePath(c, "chatPath");
+      if (AiEndpointSettings.method(c).equals("POST")) AiChat.request(c, "Connection configuration check");
+      else if (c.path("aiRequiresApproval").asBoolean() || c.path("testGenerationEnabled").asBoolean()) {
+        throw new IllegalArgumentException("GET endpoints are read-only and cannot propose tasks or generate test drafts");
+      }
+      if (c.path("aiRequiresApproval").asBoolean() && c.path("testGenerationEnabled").asBoolean()) {
+        throw new IllegalArgumentException("Task endpoints cannot generate test drafts synchronously");
+      }
       target(c, c.path("chatPath").asText());
+      if (!c.path("aiProbePath").asText().isBlank()) {
+        AiChat.validatePath(c, "aiProbePath");
+        target(c, c.path("aiProbePath").asText());
+      }
+      if (c.has("aiHeaders") && !c.path("aiHeaders").isEmpty() && type.equals("WINDOWS")) {
+        throw new IllegalArgumentException("Custom AI headers are not supported in Windows transport");
+      }
+      if (c.has("aiMethod") && !base.getScheme().equals("https") &&
+          (!type.equals("NONE") || c.path("aiHeaders").toString().contains("{{vault:"))) {
+        throw new IllegalArgumentException("Use HTTPS for company connections that send credentials");
+      }
     }
     if (type.equals("JIRA_TOKEN") && (!c.path("provider").asText().equals("jira") ||
         c.path("jiraEmail").asText().isBlank())) {
@@ -299,6 +321,43 @@ public class IntegrationService {
     JsonNode payload,
     String actor
   ) {
+    return call(c, method, path, payload, actor, false);
+  }
+
+  public JsonNode callAi(ObjectNode config, JsonNode payload, String actor) {
+    if (config.path("aiRequiresApproval").asBoolean() || !AiEndpointSettings.method(config).equals("POST")) {
+      throw new IllegalArgumentException("This endpoint cannot generate a test draft synchronously");
+    }
+    return call(config, "POST", config.path("chatPath").asText(), payload, actor, true);
+  }
+
+  ObjectNode proposeAi(ObjectNode config, String prompt, String actor) {
+    String id = config.path("id").asText();
+    if (!config.path("aiChatEnabled").asBoolean() || !config.path("aiRequiresApproval").asBoolean()) {
+      throw new IllegalArgumentException("Configure this endpoint to require approval");
+    }
+    var authentication = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+    if (authentication == null || authentication.getAuthorities().stream().noneMatch(role ->
+        Set.of("ROLE_ADMIN", "ROLE_DEVELOPER", "ROLE_TESTER").contains(role.getAuthority()))) {
+      throw new org.springframework.security.access.AccessDeniedException("Your role cannot propose external tasks");
+    }
+    var action = store.parse("{}").put("method", "POST").put("path", config.path("chatPath").asText())
+      .put("aiConfiguredRequest", true);
+    action.set("body", AiChat.request(config, prompt));
+    return propose(config, id, action, actor);
+  }
+
+  JsonNode testAi(ObjectNode c, String actor) {
+    String probe = c.path("aiProbePath").asText();
+    if (!probe.isBlank()) {
+      AiChat.validatePath(c, "aiProbePath");
+      return call(c, "GET", probe, null, actor, true);
+    }
+    if (c.path("aiRequiresApproval").asBoolean()) throw new IllegalArgumentException("Configure a read-only probe to test a task endpoint");
+    return chat(c, "Connectivity check. Reply with OK.", actor);
+  }
+
+  private JsonNode call(ObjectNode c, String method, String path, JsonNode payload, String actor, boolean ai) {
     URI uri = checkedTarget(c, path);
     String verb = HttpMethod.valueOf(method).name();
     String id = ApiRequestLog.requestId();
@@ -313,6 +372,7 @@ public class IntegrationService {
     try {
       var credentials = new HttpHeaders();
       auth(c, credentials);
+      if (ai) AiEndpointSettings.apply(c, credentials, vault);
       outbound.start("connector", verb, uri, OutboundLog.scheme(credentials.getFirst(HttpHeaders.AUTHORIZATION)),
           OutboundLog.hasCredentialHeader(credentials), !credentials.isEmpty(), false);
       dispatched = true;
@@ -321,8 +381,8 @@ public class IntegrationService {
         .uri(uri)
         .headers(h -> {
           h.addAll(credentials);
-          h.setContentType(MediaType.APPLICATION_JSON);
-          h.set("Accept", c.path("aiResponseFormat").asText().equals("sse")
+          if (!h.containsKey(HttpHeaders.CONTENT_TYPE) && payload != null) h.setContentType(MediaType.APPLICATION_JSON);
+          if (!h.containsKey(HttpHeaders.ACCEPT)) h.set(HttpHeaders.ACCEPT, c.path("aiResponseFormat").asText().equals("sse")
             ? "application/json, text/event-stream" : "application/json");
           if (c.path("provider").asText().equals("anthropic")) h.set(
             "anthropic-version",
@@ -335,7 +395,9 @@ public class IntegrationService {
       int status = entity.getStatusCode().value();
       outbound.result(id, "connector", verb, uri, status, OutboundLog.challenge(entity.getHeaders()), started, OutboundLog.statusReason(status));
       String raw = entity.getBody() == null ? "{}" : entity.getBody();
-      for (var values : credentials.values()) for (String value : values) {
+      for (var header : credentials.entrySet()) for (String value : header.getValue()) {
+        var declared = c.path("aiHeaders").path(header.getKey());
+        if (ai && declared.isTextual() && !declared.asText().startsWith("{{vault:")) continue;
         if (value.isBlank()) continue;
         raw = redact(raw, value);
         if (value.matches("(?i)^(Bearer|Basic) .+")) raw = redact(raw, value.substring(value.indexOf(' ') + 1));
@@ -420,15 +482,18 @@ public class IntegrationService {
   }
 
   public ObjectNode propose(String id, ObjectNode action, String actor) {
-    config(id);
+    return propose(config(id), id, action, actor);
+  }
+
+  private ObjectNode propose(ObjectNode config, String id, ObjectNode action, String actor) {
     String method = action.path("method").asText("POST");
     if (
       !Set.of("POST", "PUT", "PATCH", "DELETE").contains(method)
     ) throw new IllegalArgumentException("Only write actions require approval");
-    target(config(id), action.path("path").asText());
+    target(config, action.path("path").asText());
     var event = store.parse("{}");
     event.put("integrationId", id);
-    event.put("connectionRevision", config(id).path("revision").asInt());
+    event.put("connectionRevision", config.path("revision").asInt());
     event.put("status", "PENDING");
     event.put("requester", actor);
     event.set("action", action);
@@ -512,7 +577,9 @@ public class IntegrationService {
         a.path("method").asText(),
         a.path("path").asText(),
         a.path("body"),
-        actor
+        actor,
+        a.path("aiConfiguredRequest").asBoolean() && c.path("aiChatEnabled").asBoolean()
+          && a.path("method").asText().equals("POST") && a.path("path").equals(c.path("chatPath"))
       );
       if (
         publisher != null &&

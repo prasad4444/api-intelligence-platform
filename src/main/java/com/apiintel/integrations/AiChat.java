@@ -20,13 +20,35 @@ public final class AiChat {
     if (!template.toString().contains(PROMPT)) {
       throw new IllegalArgumentException("Put {{prompt}} in the JSON field that receives the message");
     }
-    String path = config.path("chatPath").asText();
-    if (path.isBlank()) throw new IllegalArgumentException("Enter the full AI request URL");
-    if (path.matches("(?i).*[?&][^=&]*(?:token|secret|password|api[_-]?key)[^=&]*=.*")) {
-      throw new IllegalArgumentException("Store API credentials in the credential field, separate from the URL");
-    }
+    if (config.has("aiMethod")) checkTemplate(template);
+    validatePath(config, "chatPath");
     pointer(config);
     return (ObjectNode) substitute(template, prompt);
+  }
+
+  static void validatePath(ObjectNode config, String field) {
+    String path = config.path(field).asText();
+    if (path.isBlank()) throw new IllegalArgumentException("Enter the full AI request URL");
+    String query = path.contains("?") ? path.substring(path.indexOf('?') + 1) : "";
+    for (String parameter : query.split("&")) {
+      String key;
+      try { key = java.net.URLDecoder.decode(parameter.split("=", 2)[0], java.nio.charset.StandardCharsets.UTF_8); }
+      catch (IllegalArgumentException e) { throw new IllegalArgumentException("The endpoint contains an invalid query parameter"); }
+      if (key.matches("(?i).*(?:token|secret|password|api[_-]?key).*")) {
+        throw new IllegalArgumentException("Store API credentials in the credential field, separate from the URL");
+      }
+    }
+    pointer(config);
+  }
+
+  private static void checkTemplate(JsonNode template) {
+    if (template.isObject()) template.fields().forEachRemaining(field -> {
+      if (field.getKey().matches("(?i)^(authorization|cookie|password|token|access[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret)$")) {
+        throw new IllegalArgumentException("Keep credentials in authentication settings, separate from the JSON body");
+      }
+      checkTemplate(field.getValue());
+    });
+    else if (template.isArray()) template.forEach(AiChat::checkTemplate);
   }
 
   private static JsonNode substitute(JsonNode node, String prompt) {

@@ -118,6 +118,6 @@ public class PlatformController {
     return store.audit();
   }
   private void checkPublicKind(String kind) {
-    if (kind.equals("ai-drafts")) throw new IllegalArgumentException("Use the AI review endpoints");
+    if (Set.of("ai-drafts", "ai-checks").contains(kind)) throw new IllegalArgumentException("Use the AI review endpoints");
   }
 }
