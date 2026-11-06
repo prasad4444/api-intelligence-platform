@@ -77,3 +77,9 @@ Signal payloads come from the daemon's space definitions. See [Friday integratio
 ## Any future HTTP integration
 
 Add a custom connector, assign an exact base URL, configure its host allowlist, choose authentication and allowed roles. Reads use a relative path on that host. Writes use a reviewed JSON action. OAuth2 client credentials requests use `tokenPath`, `clientId`, a vault reference for the client secret and `scope`; the server obtains a fresh access token for each operation without returning it to the UI. Token URL and API URL must share the configured host. Interactive OAuth consent is a separate future adapter.
+
+## Provider presets and AI artifact review
+
+Integration Hub includes presets for Microsoft 365 Copilot gateways, internal Stylus gateways, Devin sessions, OpenAI-compatible APIs, Anthropic Messages, and custom AI HTTP endpoints. Configure the exact approved destination and store credentials in the vault. Copilot and Stylus presets expect a compatible gateway. Devin tasks use the session action and approval queue.
+
+AI Copilot can generate editable contract suggestions, Mermaid diagrams, and Jira story drafts. Choose an enabled provider, inspect the selected contract revision and destination, and confirm sending the context. For diagrams and stories, operation scope includes the selected operation and shared components. Review records are saved locally and are visible to their creator. Applying a contract suggestion creates a new DRAFT revision, regenerates the linked artifacts, and clears the previous approval. Applying a diagram or story saves a local record. From a reviewed story, you can propose a Jira issue separately for approval. Test Library has its own reviewed test package flow.

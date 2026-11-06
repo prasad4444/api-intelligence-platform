@@ -26,7 +26,7 @@ export default function TestGeneration({
     setResult(null);
     setConsent(false);
     setError("");
-  }, [spec?.id, spec?.revision, engine]);
+  }, [spec?.id, spec?.revision, engine, connection?.revision]);
   async function generate() {
     if (!spec) return;
     setBusy(true);
@@ -41,8 +41,11 @@ export default function TestGeneration({
         const p = await post(`/tests/generate/${spec.id}/preview`, {
           integrationId: engine,
           consent,
+          specRevision: spec.revision,
+          integrationRevision: connection?.revision,
         });
         setPreview(p);
+        setConsent(false);
         setText(pretty(p.bundle));
       }
     } catch (e) {
@@ -130,8 +133,7 @@ export default function TestGeneration({
             disabled={busy}
             onChange={(e) => setConsent(e.target.checked)}
           />{" "}
-          Send this selected OpenAPI document to {connection?.name}. Provider
-          usage may incur charges.
+          Send {spec?.name || "the selected contract"} revision {spec?.revision || "—"} to {connection?.name} at {connection?.baseUrl}.
         </label>
       )}
       <p className="muted test-generation-note">
@@ -154,6 +156,11 @@ export default function TestGeneration({
             Review payloads and expected results. Operations and case/suite
             references are validated against the selected contract.
           </p>
+          <div className="ai-context-card">
+            <strong>{preview.bundle?.cases?.length || 0} proposed cases</strong>
+            <ul>{(preview.bundle?.cases || []).slice(0, 12).map((item: Row) =>
+              <li key={item.key}><code>{item.operation}</code> · {item.title}</li>)}</ul>
+          </div>
           <textarea
             aria-label="Generated test package"
             className="code tall"

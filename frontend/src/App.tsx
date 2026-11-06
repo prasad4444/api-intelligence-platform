@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Activity,
   LayoutDashboard,
@@ -23,6 +23,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { request, post, save, resetCsrf, pretty, type Row } from "./api";
+import { listOperations } from "./endpoint-model";
 import { Badge, Panel, Editor, Records, Field } from "./components";
 import {
   Workspace,
@@ -68,15 +69,29 @@ const descriptions: Record<string, string> = {
     "One control plane for your tools, credentials and agents.",
   Admin: "Access policies, encrypted secrets and traceable changes.",
 };
+const pageKinds: Record<string, string[]> = {
+  Dashboard: ["tests", "runs", "stories", "integrations", "events"],
+  "API Workspace": ["environments", "collections", "tests", "runs"],
+  "Request Studio": ["environments", "collections", "history"],
+  "Test Library": ["environments", "tests", "suites", "plans", "runs", "integrations"],
+  "Team Capacity": ["team", "sprints", "leaves", "holidays", "stories"],
+  Jira: ["stories", "runs", "integrations"],
+  Governance: ["rules", "governance-runs"],
+  Architecture: ["diagrams"],
+  "AI Copilot": ["integrations", "ai-drafts"],
+  "Integration Hub": ["integrations", "events"],
+  GitHub: ["integrations"],
+};
 export type PageProps = {
   data: Record<string, Row[]>;
-  reload: () => Promise<void>;
-  run: (fn: () => Promise<unknown>) => Promise<any>;
+  reload: (kinds?: string[]) => Promise<void>;
+  run: (fn: () => Promise<unknown>, kinds?: string[]) => Promise<any>;
   edit: (kind: string, row: Row) => void;
   spec: Row | undefined;
   setPage: (s: string) => void;
   selectSpec?: (id: string) => void;
   roles?: string[];
+  explorerFocus?: {operation: string};
 };
 export default function App() {
   const [user, setUser] = useState<Row | null>(null),
@@ -84,7 +99,8 @@ export default function App() {
     [page, setPage] = useState("Dashboard"),
     [data, setData] = useState<Record<string, Row[]>>({}),
     [specId, setSpecId] = useState(""),
-    [dark, setDark] = useState(localStorage.getItem("theme") === "dark"),
+    [theme, setTheme] = useState(localStorage.getItem("theme") || "system"),
+    [explorerFocus, setExplorerFocus] = useState<{operation: string}>(),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [editor, setEditor] = useState<{ kind: string; row: Row } | null>(null),
@@ -98,9 +114,13 @@ export default function App() {
       .finally(() => setChecking(false));
   }, []);
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    localStorage.setItem("theme", dark ? "dark" : "light");
-  }, [dark]);
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => document.documentElement.classList.toggle("dark", theme === "dark" || theme === "system" && prefersDark.matches);
+    update();
+    prefersDark.addEventListener("change", update);
+    localStorage.setItem("theme", theme);
+    return () => prefersDark.removeEventListener("change", update);
+  }, [theme]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
@@ -112,41 +132,32 @@ export default function App() {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);
-  const reload = useCallback(async () => {
-    const kinds = [
-      "environments",
-      "specs",
-      "collections",
-      "history",
-      "stories",
-      "team",
-      "sprints",
-      "leaves",
-      "holidays",
-      "tests",
-      "suites",
-      "plans",
-      "runs",
-      "rules",
-      "diagrams",
-      "integrations",
-      "events",
-      "governance-runs",
-    ];
-    const entries = await Promise.all(
-      kinds.map(async (k) => [k, await request(k === "environments" ? "/environments" : "/records/" + k)]),
-    );
-    setData(Object.fromEntries(entries));
-  }, []);
+  const fetchSequence = useRef<Record<string, number>>({});
+  const sessionSequence = useRef(0);
+  const reload = useCallback(async (kinds = ["specs", ...(pageKinds[page] || [])]) => {
+    const session = sessionSequence.current;
+    const entries = await Promise.all([...new Set(kinds)].map(async kind => {
+      const sequence = (fetchSequence.current[kind] || 0) + 1;
+      fetchSequence.current[kind] = sequence;
+      const rows = await request(kind === "environments" || kind === "ai-drafts" ? "/" + kind : "/records/" + kind);
+      return {kind, sequence, rows};
+    }));
+    if (session !== sessionSequence.current) return;
+    setData(current => ({
+      ...current,
+      ...Object.fromEntries(entries.filter(entry => fetchSequence.current[entry.kind] === entry.sequence)
+        .map(entry => [entry.kind, entry.rows])),
+    }));
+  }, [page]);
   useEffect(() => {
-    if (user) reload().catch((e) => setNotice(String(e)));
+    if (user) reload().catch(e => setNotice(String(e)));
   }, [user, reload]);
-  async function run(fn: () => Promise<unknown>) {
+  async function run(fn: () => Promise<unknown>, kinds?: string[]) {
     setBusy(true);
     setNotice("");
     try {
       const result = await fn();
-      await reload();
+      if (kinds?.length !== 0) await reload(kinds);
       setNotice("Saved successfully");
       return result;
     } catch (e) {
@@ -173,8 +184,22 @@ export default function App() {
     spec,
     setPage,
     selectSpec: setSpecId,
+    explorerFocus,
     roles: (user.roles||[]).map((r: Row|string)=>typeof r==="string"?r:r.authority),
   };
+  const find = query.trim().toLowerCase();
+  const commands = [
+    ...nav.map(([label, Icon]) => ({key: label, label, Icon, go: () => setPage(label)})),
+    ...listOperations(spec?.document).map(operation => ({
+      key: operation.key, label: operation.key + " · " + (operation.operation.summary || "API operation"), Icon: Braces,
+      go: () => {setExplorerFocus({operation: operation.key});setPage("API Workspace");},
+    })),
+    ...(data.tests || []).map(record => ({
+      key: record.id, label: (record.title || record.id) + " · Test case", Icon: FlaskConical,
+      go: () => {setPage("Test Library");setEditor({kind: "tests", row: record});},
+    })),
+  ].filter(command => command.label.toLowerCase().includes(find)).slice(0, 24);
+  const openCommand = (go: () => void) => {go();setPalette(false);setQuery("");};
   return (
     <div className="app">
       <aside className="sidebar">
@@ -235,9 +260,9 @@ export default function App() {
             <button className="search-button" onClick={() => setPalette(true)}>
               <Search size={16} /> Jump to… <kbd>⌘ K</kbd>
             </button>
-            <button aria-label="Toggle theme" onClick={() => setDark(!dark)}>
-              {dark ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
+            <select className="theme-select" aria-label="Theme" value={theme} onChange={event => setTheme(event.target.value)}>
+              <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
+            </select>
             <span className="avatar small">
               {user.name.slice(0, 2).toUpperCase()}
             </span>
@@ -246,6 +271,8 @@ export default function App() {
               onClick={async () => {
                 await post("/logout");
                 resetCsrf();
+                sessionSequence.current++;
+                setData({});
                 setUser(null);
               }}
             >
@@ -260,7 +287,7 @@ export default function App() {
               <h1>{page}</h1>
               <p>{descriptions[page]}</p>
             </div>
-            <button onClick={() => run(reload)}>
+            <button onClick={() => run(() => reload(), [])}>
               <RefreshCw size={15} className={busy ? "spin" : ""} /> Refresh
             </button>
           </div>
@@ -333,28 +360,20 @@ export default function App() {
               <Command size={20} />
               <input
                 autoFocus
-                placeholder="Go to a tool or page…"
+                placeholder="Find a page, operation or test…"
+                aria-label="Find a workspace item"
+                onKeyDown={event => {if (event.key === "Enter" && commands[0]) openCommand(commands[0].go);}}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
               <kbd>ESC</kbd>
             </div>
-            {nav
-              .filter(([n]) => n.toLowerCase().includes(query.toLowerCase()))
-              .map(([n, Icon]) => (
-                <button
-                  key={n}
-                  onClick={() => {
-                    setPage(n);
-                    setPalette(false);
-                    setQuery("");
-                  }}
-                >
-                  <Icon size={18} />
-                  {n}
-                  <ArrowUpRight size={16} />
-                </button>
-              ))}
+            <div className="command-results">
+              {commands.map(({key, label, Icon, go}) => <button key={key} onClick={() => openCommand(go)}>
+                <Icon size={18} />{label}<ArrowUpRight size={16} />
+              </button>)}
+              {!commands.length && <p className="muted">No matching workspace items.</p>}
+            </div>
           </div>
         </div>
       )}
@@ -425,7 +444,7 @@ function Login({ onLogin }: { onLogin: (u: Row) => void }) {
     </div>
   );
 }
-function Dashboard({ data, setPage }: PageProps) {
+function Dashboard({ data, setPage, selectSpec }: PageProps) {
   const specs = data.specs || [],
     tests = data.tests || [],
     runs = data.runs || [],
@@ -465,6 +484,20 @@ function Dashboard({ data, setPage }: PageProps) {
           </span>
         </div>
       </div>
+      <Panel title="Needs attention">
+        <div className="attention-list">
+          {specs.filter(record => record.status === "IN_REVIEW").slice(0, 4).map(record => <button key={record.id}
+            onClick={() => {selectSpec?.(record.id);setPage("API Workspace");}}>
+            <Badge tone="purple">Review</Badge>{record.name}<ArrowUpRight size={15} />
+          </button>)}
+          {runs.filter(record => record.status === "FAIL").slice(0, 4).map(record => <button key={record.id}
+            onClick={() => {if (record.specId) selectSpec?.(record.specId);setPage("Test Library");}}>
+            <Badge tone="red">Failed run</Badge>{tests.find(test => test.id === record.caseId)?.title || "API test"}<ArrowUpRight size={15} />
+          </button>)}
+          {!specs.some(record => record.status === "IN_REVIEW") && !runs.some(record => record.status === "FAIL") &&
+            <p className="muted">No pending contract reviews or failing runs.</p>}
+        </div>
+      </Panel>
       <div className="stats-grid">
         {[
           [specs.length, "API contracts", Braces, "Versioned and reviewable"],

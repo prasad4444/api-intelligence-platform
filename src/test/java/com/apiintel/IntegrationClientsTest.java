@@ -279,7 +279,7 @@ class IntegrationClientsTest {
       .willReturn(aResponse().withHeader("Content-Type", "text/event-stream")
         .withBody("data: {\"delta\":\"Hel\"}\n\ndata: {\"delta\":\"lo\"}\n\ndata: [DONE]\n\n")));
     var controller = new IntegrationController(service, vault, store);
-    assertEquals(Map.of("response", TextNode.valueOf("Hello")), controller.ai(
+    assertEquals(store.parse("{}").put("response", "Hello"), controller.ai(
       config.path("id").asText(), store.parse("{}").put("prompt", "Say \"hello\""), () -> "test"));
     assertFalse(config.toString().contains("captured-token"));
 
@@ -288,6 +288,80 @@ class IntegrationClientsTest {
     assertThrows(IllegalArgumentException.class, () -> AiChat.response(config, store.parse("{}")));
     config.put("chatPath", "/chat?access_token=secret");
     assertThrows(IllegalArgumentException.class, () -> AiChat.request(config, "test"));
+  }
+
+  @Test
+  void savedOperationUsesVaultAndRejectsStaleRevision() {
+    var guard = mock(NetworkGuard.class);
+    when(guard.validate(anyString())).thenAnswer(invocation -> java.net.URI.create(invocation.getArgument(0)));
+    var environments = new com.apiintel.environments.EnvironmentService(store, vault);
+    var profile = store.parse("""
+      {"name":"Execution fixture","scope":"environment","allowedHosts":["localhost"],
+       "values":[{"key":"token","secret":true,"value":"test-vault-token-934"}]}
+      """);
+    var savedProfile = environments.save(profile, "test");
+    assertFalse(savedProfile.toString().contains("test-vault-token-934"));
+    var requests = new com.apiintel.network.RequestService(guard, store);
+    org.springframework.test.util.ReflectionTestUtils.setField(requests, "environments", environments);
+    var spec = store.parse("""
+      {"name":"Contract","document":{"openapi":"3.1.0","info":{"title":"Contract","version":"1"},
+        "servers":[{"url":"http://unused.example"},{"url":"http://unused.example"}],
+        "security":[{"token":[]}],"components":{"securitySchemes":{"token":{"type":"http","scheme":"bearer"}}},
+        "paths":{"/orders/{id}":{"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],
+          "get":{"parameters":[{"name":"tag","in":"query","schema":{"type":"array","items":{"type":"string"}}}],"responses":{"200":{"description":"OK"}}}}}}}
+      """);
+    ((ObjectNode) spec.path("document").path("servers").path(1)).put("url", server.baseUrl());
+    var saved = store.save("specs", spec, "test");
+    String id = saved.path("id").asText();
+    var input = store.parse("""
+      {"operation":"GET /orders/{id}","serverIndex":1,"expectedRevision":0,
+       "parameters":{"path:id":"ACME 1","query:tag":["new","open"]},
+       "credentials":{"token":{"secret":"token"}}}
+      """).put("environmentId", savedProfile.path("id").asText());
+    var operations = new com.apiintel.workspace.OperationExecution(store, requests);
+    assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> operations.execute(id, input, "test"));
+    server.verify(0, anyRequestedFor(anyUrl()));
+    input.put("expectedRevision", saved.path("revision").asInt());
+    server.stubFor(get(urlEqualTo("/orders/ACME%201?tag=new&tag=open"))
+      .withHeader("Authorization", equalTo("Bearer test-vault-token-934"))
+      .willReturn(okJson("{\"echo\":\"test-vault-token-934\"}").withHeader("X-Echo", "test-vault-token-934")));
+    var response = operations.execute(id, input, "test");
+    assertEquals(200, response.path("status").asInt());
+    assertTrue(response.path("body").asText().contains("REDACTED"));
+    assertFalse(response.toString().contains("test-vault-token-934"));
+  }
+
+  @Test
+  void aiStoryRequiresCurrentConsentAndAppliesOnlyAsLocalDraft() {
+    config.put("aiChatEnabled", true).put("chatPath", "/chat");
+    config.set("aiRequestTemplate", store.parse("{\"prompt\":\"{{prompt}}\"}"));
+    config = store.save("integrations", config, "test");
+    var spec = store.save("specs", store.parse("""
+      {"name":"Draft API","document":{"openapi":"3.1.0","info":{"title":"Draft API","version":"1"},
+       "paths":{"/a":{"get":{"responses":{}}},"/b":{"post":{"responses":{}}}}}}
+      """), "test");
+    var controller = new com.apiintel.integrations.AiDraftController(store, service,
+      mock(com.apiintel.workspace.SpecService.class), mock(com.apiintel.workspace.WorkspaceArtifacts.class), new ObjectMapper());
+    var input = store.parse("{}").put("kind", "story").put("operation", "GET /a").put("prompt", "Propose a story")
+      .put("specId", spec.path("id").asText()).put("specRevision", spec.path("revision").asInt())
+      .put("integrationId", config.path("id").asText()).put("integrationRevision", 0);
+    assertThrows(IllegalArgumentException.class, () -> controller.preview(input, () -> "test"));
+    input.put("consent", true);
+    assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> controller.preview(input, () -> "test"));
+    server.verify(0, anyRequestedFor(anyUrl()));
+    input.put("integrationRevision", config.path("revision").asInt());
+    server.stubFor(post(urlEqualTo("/chat")).withRequestBody(containing("/a")).withRequestBody(notContaining("/b"))
+      .willReturn(okJson("{\"summary\":\"Improve API\",\"description\":\"Clarify the response\",\"acceptanceCriteria\":[\"Document the response\"]}")));
+    var draft = controller.preview(input, () -> "test");
+    assertTrue(store.list("stories").isEmpty());
+    var acceptance = store.parse("{}").put("expectedRevision", draft.path("revision").asInt());
+    acceptance.set("artifact", draft.path("artifact"));
+    String draftId = draft.path("id").asText();
+    assertThrows(org.springframework.security.access.AccessDeniedException.class, () -> controller.accept(draftId, acceptance, () -> "other"));
+    var result = controller.accept(draftId, acceptance, () -> "test");
+    assertEquals("To Do", result.path("record").path("status").asText());
+    assertEquals("ACCEPTED", result.path("draft").path("status").asText());
+    assertTrue(store.list("events").isEmpty());
   }
 
   @Test

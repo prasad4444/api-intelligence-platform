@@ -35,11 +35,13 @@ public class PlatformController {
 
   @GetMapping("/records/{kind}")
   public List<ObjectNode> list(@PathVariable String kind) {
+    checkPublicKind(kind);
     return store.list(kind);
   }
 
   @GetMapping("/records/{kind}/{id}")
   public ObjectNode get(@PathVariable String kind, @PathVariable String id) {
+    checkPublicKind(kind);
     return store.get(kind, id);
   }
 
@@ -51,6 +53,7 @@ public class PlatformController {
     @RequestBody ObjectNode data,
     Principal p
   ) {
+    checkPublicKind(kind);
     if (
       Set.of("environments", "integrations", "rules", "events", "governance-runs").contains(
         kind
@@ -81,6 +84,7 @@ public class PlatformController {
     @PathVariable String id,
     Principal p
   ) {
+    checkPublicKind(kind);
     if (kind.equals("environments")) throw new IllegalArgumentException("Use the environments endpoint");
     store.delete(kind, id, p.getName());
   }
@@ -90,6 +94,7 @@ public class PlatformController {
     @PathVariable String kind,
     @PathVariable String id
   ) {
+    checkPublicKind(kind);
     return store.versions(kind, id);
   }
 
@@ -111,5 +116,8 @@ public class PlatformController {
   @PreAuthorize("hasRole('ADMIN')")
   public List<Map<String, Object>> audit() {
     return store.audit();
+  }
+  private void checkPublicKind(String kind) {
+    if (kind.equals("ai-drafts")) throw new IllegalArgumentException("Use the AI review endpoints");
   }
 }

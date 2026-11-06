@@ -36,3 +36,30 @@ export function mediaExamples(media:Row,document:Row,mode:"request"|"response"):
  if(!out.length&&media.schema)out.push({name:"Generated schema example",value:schemaExample(media.schema,document,mode),generated:true});return out;
 }
 export function operationServer(item:Operation,document:Row):string{const server=(item.operation.servers||item.pathItem.servers||document.servers||[])[0];let url=typeof server?.url==="string"?server.url:"";for(const [key,v]of Object.entries(object(server?.variables)))url=url.replaceAll("{"+key+"}",String(object(v).default??"{"+key+"}"));return url;}
+
+export function operationServers(item: Operation, document: Row) {
+  const servers = item.operation.servers ?? item.pathItem.servers ?? document.servers;
+  if (!Array.isArray(servers)) return [];
+  return servers.map((value, index) => {
+    const server = object(value);
+    let url = typeof server.url === "string" ? server.url : "";
+    for (const [name, variable] of Object.entries(object(server.variables))) {
+      url = url.replaceAll("{" + name + "}", String(object(variable).default ?? "{" + name + "}"));
+    }
+    return { index, url, description: typeof server.description === "string" ? server.description : "" };
+  });
+}
+
+export function explorerModel(document?: Row) {
+  const operations = listOperations(document);
+  const tags = new Map<string, Operation[]>();
+  for (const item of operations) {
+    const names = Array.isArray(item.operation.tags) ? item.operation.tags.filter((tag: unknown): tag is string => typeof tag === "string") : [];
+    for (const tag of new Set<string>(names.length ? names : ["default"])) {
+      const group = tags.get(tag) ?? [];
+      group.push(item);
+      tags.set(tag, group);
+    }
+  }
+  return { operations, tags, schemas: Object.entries(object(document?.components?.schemas)) };
+}

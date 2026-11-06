@@ -181,6 +181,8 @@ function CollectionTree({items,collectionId,path=[],search,onOpen,onFolder,onMan
  })}</>;
 }
 export default function RequestStudio({ data, reload, roles }: PageProps) {
+  const [sidebarWidth, setSidebarWidth] = useState(() => Math.max(170, Math.min(340, Number(localStorage.getItem("studio-sidebar-width")) || 245)));
+  useEffect(() => {localStorage.setItem("studio-sidebar-width", String(sidebarWidth));}, [sidebarWidth]);
   const [tabs, setTabs] = useState<Draft[]>(() => [
     { ...newDraft(), name: "New request", url: "{{baseUrl}}/get" },
   ]);
@@ -697,8 +699,11 @@ export default function RequestStudio({ data, reload, roles }: PageProps) {
           </button>
         </div>
       </header>
-      <div className="rs-layout">
+      <div className="rs-layout" style={{"--studio-sidebar-width": sidebarWidth + "px"} as React.CSSProperties}>
         <aside className="rs-sidebar">
+          <label className="rs-pane-size">Collection pane width
+            <input type="range" min="170" max="340" value={sidebarWidth} onChange={event => setSidebarWidth(Number(event.target.value))} />
+          </label>
           <div className="rs-side-tabs">
             {["Collections", "History"].map((t) => (
               <button

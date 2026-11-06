@@ -52,6 +52,49 @@ public class IntegrationService {
     this.friday = friday;
   }
 
+  public JsonNode chat(String id, String prompt, String actor) {
+    authorize(id);
+    if (prompt.length() > 20000) throw new IllegalArgumentException("Prompt is too large");
+    return chat(config(id), prompt, actor);
+  }
+
+  JsonNode chat(ObjectNode c, String prompt, String actor) {
+    String provider = c.path("provider").asText();
+    if (prompt.length() > 180000) throw new IllegalArgumentException("Contract context is too large. Select a smaller scope");
+    if (prompt.isBlank()) throw new IllegalArgumentException("Enter a prompt");
+    if (c.path("aiChatEnabled").asBoolean()) {
+      var response = call(c, "POST", c.path("chatPath").asText(), AiChat.request(c, prompt), actor);
+      return store.parse("{}").set("response", AiChat.response(c, response));
+    }
+    var b = store.parse("{}");
+    b.put("model", c.path("model").asText(""));
+    String path;
+    switch (provider) {
+      case "openai", "azure" -> {
+        var m = b.putArray("messages").addObject();
+        m.put("role", "user");
+        m.put("content", prompt);
+        path = c.path("chatPath").asText("/v1/chat/completions");
+      }
+      case "anthropic" -> {
+        b.put("max_tokens", 1024);
+        var m = b.putArray("messages").addObject();
+        m.put("role", "user");
+        m.put("content", prompt);
+        path = "/v1/messages";
+      }
+      case "ollama" -> {
+        b.put("prompt", prompt);
+        b.put("stream", false);
+        path = "/api/generate";
+      }
+      default -> throw new IllegalArgumentException(
+        "Use the connector action editor for this provider"
+      );
+    }
+    return call(c, "POST", path, b, actor);
+  }
+
   public ObjectNode config(String id) {
     return store.get("integrations", id);
   }
@@ -261,11 +304,13 @@ public class IntegrationService {
       return windows.call(c,uri,method,payload);
     }
     try {
+      var credentials = new HttpHeaders();
+      auth(c, credentials);
       var request = client(c)
         .method(HttpMethod.valueOf(method))
         .uri(uri)
         .headers(h -> {
-          auth(c, h);
+          h.addAll(credentials);
           h.setContentType(MediaType.APPLICATION_JSON);
           h.set("Accept", c.path("aiResponseFormat").asText().equals("sse")
             ? "application/json, text/event-stream" : "application/json");
@@ -282,6 +327,11 @@ public class IntegrationService {
         .bodyToMono(String.class)
         .defaultIfEmpty("{}")
         .block(Duration.ofSeconds(35));
+      for (var values : credentials.values()) for (String value : values) {
+        if (value.isBlank()) continue;
+        raw = redact(raw, value);
+        if (value.matches("(?i)^(Bearer|Basic) .+")) raw = redact(raw, value.substring(value.indexOf(' ') + 1));
+      }
       try {
         return new ObjectMapper().readTree(raw);
       } catch (Exception e) {
@@ -303,6 +353,11 @@ public class IntegrationService {
         "Provider unavailable or request timed out"
       );
     }
+  }
+
+  private String redact(String text, String secret) {
+    String quoted = TextNode.valueOf(secret).toString();
+    return text.replace(secret, "REDACTED").replace(quoted.substring(1, quoted.length() - 1), "REDACTED");
   }
 
   public Map<String,Object> checkWindows(String id) {

@@ -45,7 +45,7 @@ test("login and every workspace module renders", async ({ page }) => {
       fullPage: true,
     });
   }
-  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await page.getByLabel("Theme", {exact:true}).selectOption("dark");
   await expect(page.locator("html")).toHaveClass(/dark/);
   await page.keyboard.press("Control+k");
   await expect(
@@ -65,6 +65,7 @@ test("contract lint, local request rejection and capacity workbook import", asyn
   await expect(
     page.getByRole("heading", { name: "Results", exact: true }),
   ).toBeVisible();
+  await page.getByText("Standalone GET check", {exact:true}).click();
   await page.getByLabel("Try-it URL").fill("http://127.0.0.1");
   await page.getByRole("button", { name: "Send GET" }).click();
   await expect(page.getByRole("status")).toContainText("blocked");
