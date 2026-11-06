@@ -74,7 +74,8 @@ public class TestGenerationService {
       case "custom-json" -> {String field=config.path("testPromptField").asText("prompt");if(!field.matches("[a-zA-Z][a-zA-Z0-9_]{0,59}"))throw new IllegalArgumentException("Prompt field must be a simple JSON field name");payload.put(field,prompt);payload.put("stream",false);path=config.path("chatPath").asText();if(path.isBlank())throw new IllegalArgumentException("Configure the approved AI gateway endpoint path");}
       default -> throw new IllegalArgumentException("Configure an approved JSON gateway protocol for this provider. A chat website login alone does not provide API access.");
     }
-    JsonNode response=integrations.call(config,"POST",path,payload,actor);
+    JsonNode response=config.path("aiChatEnabled").asBoolean() && config.has("aiMethod")
+      ? integrations.callAi(config,payload,actor) : integrations.call(config,"POST",path,payload,actor);
     String pointer=config.path("testResponsePointer").asText();
     if (config.path("aiChatEnabled").asBoolean()) response = AiChat.response(config, response);
     else if(!pointer.isBlank())response=response.at(pointer);

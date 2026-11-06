@@ -98,3 +98,16 @@ Request Studio and the API Explorer display the request ID returned by Spring Bo
 | `upstream_result status=403` | Check upstream token scopes and user or service account permissions. |
 
 A contract with no security declaration can still describe an API that requires credentials. In **Try it out**, choose **Credential override for undocumented authentication**, select Bearer, Basic, or API key header, and select the saved environment and variable. The environment must allow the exact target hostname. Browser cookies are intentionally excluded by the guarded executor. The logs omit raw URL paths, query strings, header values, request or response bodies, and secrets.
+
+## AI Tools company endpoints
+
+AI Copilot displays Microsoft Copilot, Devin, GitHub Copilot, and Stylus tabs by default, plus any additional configured AI providers. Configure a company endpoint under the tab or Integration Hub. This feature uses company-provided endpoints and does not select or contact public vendor APIs automatically. GitHub Copilot connections are independent of the GitHub repository connector.
+
+- Save the credential in the existing vault and enter its reference in AI Tools. With AUTHORIZATION, store the full header value (for example, Bearer followed by the token). With BEARER, store the token itself. AI Tools does not load existing secret values.
+- Configure a full URL, POST JSON template containing `{{prompt}}`, and JSON pointer or SSE response mapping. GET retrieves a configured response without a prompt or context. Use a same-host GET probe for connection tests. Without a probe, POST connectivity checks require explicit permission to send a synthetic prompt.
+- Additional headers are a JSON object. Public protocol headers such as Accept and Content-Type can use literal values. Use `{{vault:reference-name}}` for custom headers. Authorization is handled by the selected auth mode. Browser cookies and transport headers are not forwarded.
+- Preview the data before sending. Choose the current OpenAPI revision, a selected operation, or up to ten saved test summaries. The confirmation is single-use and expires after three minutes. It is invalid if the request, revision, or connection changes. Test response bodies and common credential/example fields are excluded. Review descriptions and your prompt for anything sensitive.
+- Enable the approval option for company endpoints that create tasks. A confirmed POST enters Integration Hub's approval queue and makes no outbound call until approved and executed. Configure a read-only probe for these endpoints.
+- Stylus accepts direct HTTP setup or redacted cURL templates. For example, use `-H 'Authorization: Bearer {{vault:stylus-token}}'`. Import parses the HTTP settings and never runs Bash. Export produces vault placeholders. File arguments, shell substitutions, and literal authorization values are rejected.
+
+Keep `INTEGRATION_HOSTS` and, where applicable, `INTEGRATION_PRIVATE_HOSTS` configured for your approved destination. Request IDs connect connection tests and execution errors to the backend console and Admin usage history. The feature works with the embedded SQLite default and the explicit H2 configuration.

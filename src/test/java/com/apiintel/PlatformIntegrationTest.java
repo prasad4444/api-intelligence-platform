@@ -252,7 +252,7 @@ class PlatformIntegrationTest {
   @Test
   void authenticatedResourcesAndAudit() throws Exception {
     for (String kind : RecordStore.KINDS)
-      if (!kind.equals("ai-drafts")) mvc.perform(get("/api/records/" + kind)).andExpect(status().isOk());
+      if (!Set.of("ai-drafts", "ai-checks").contains(kind)) mvc.perform(get("/api/records/" + kind)).andExpect(status().isOk());
     mvc.perform(get("/api/records/ai-drafts")).andExpect(status().isBadRequest());
     mvc.perform(get("/api/ai-drafts")).andExpect(status().isOk());
     mvc.perform(get("/api/me")).andExpect(jsonPath("$.name").value("admin"));

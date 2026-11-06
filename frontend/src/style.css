@@ -1464,3 +1464,13 @@ tr:last-child td {
 .usage-summary small { color: var(--muted); }
 .usage-summary strong { font-size: 18px; }
 .usage-table { overflow: auto; margin: 12px 0; }
+
+.ai-provider-tabs { display: flex; gap: 7px; overflow: auto; padding: 2px 2px 10px; border-bottom: 1px solid var(--border); }
+.ai-provider-tabs button { flex: 0 0 auto; white-space: nowrap; }
+.ai-provider-tabs [aria-selected="true"] { background: var(--soft); color: var(--accent); border-color: var(--accent); }
+.ai-provider-panel { display: grid; gap: 12px; padding-top: 16px; }
+.ai-provider-actions { align-items: end; }
+.ai-connection-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ai-connection-status code { overflow-wrap: anywhere; }
+.ai-connection-status span { color: var(--muted); font-size: 12px; }
+.ai-provider-panel pre { max-height: 320px; overflow: auto; }

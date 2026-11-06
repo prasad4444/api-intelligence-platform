@@ -34,6 +34,7 @@ public class RecordStore {
     "integrations",
     "events",
     "ai-drafts",
+    "ai-checks",
     "governance-runs"
   );
 

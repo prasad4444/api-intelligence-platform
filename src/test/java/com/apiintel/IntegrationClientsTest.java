@@ -403,6 +403,45 @@ class IntegrationClientsTest {
   }
 
   @Test
+  void companyAiProbeAndContextUseVaultAndOneTimeConfirmation() {
+    config.put("provider", "stylus").put("aiChatEnabled", true).put("chatPath", "/company/chat")
+      .put("aiMethod", "POST").put("aiProbePath", "/company/health").put("aiResponsePointer", "/answer");
+    config.set("aiRequestTemplate", store.parse("{\"input\":\"{{prompt}}\"}"));
+    config.putObject("aiHeaders").put("X-Company-Token", "{{vault:company-header}}");
+    vault.put("company-header", "company-secret-value");
+    config = store.save("integrations", config, "test");
+    String id = config.path("id").asText();
+    var spec = store.save("specs", store.parse("""
+      {"name":"Orders","document":{"openapi":"3.1.0","paths":{"/orders":{"get":{"summary":"List orders","example":"private-example"}}}}}
+      """), "test");
+    var controller = new com.apiintel.integrations.AiToolsController(store, service);
+    var input = store.parse("{}").put("connectionRevision", config.path("revision").asInt())
+      .put("scope", "operation").put("operation", "GET /orders")
+      .put("specId", spec.path("id").asText()).put("specRevision", spec.path("revision").asInt())
+      .put("prompt", "Review");
+    assertEquals("UNTESTED", controller.status(id).path("state").asText());
+    server.stubFor(get(urlEqualTo("/company/health")).withHeader("X-Company-Token", equalTo("company-secret-value"))
+      .willReturn(okJson("{}")));
+    assertEquals("CONNECTED", controller.test(id, input, () -> "test").path("state").asText());
+    assertEquals("CONNECTED", controller.status(id).path("state").asText());
+    var preview = controller.preview(id, input, () -> "test");
+    assertFalse(preview.toString().contains("private-example"));
+    assertFalse(preview.toString().contains("company-secret-value"));
+    server.verify(0, postRequestedFor(anyUrl()));
+    input.put("confirmationId", preview.path("confirmationId").asText()).put("prompt", "Changed");
+    assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> controller.send(id, input, () -> "test"));
+    server.stubFor(post(urlEqualTo("/company/chat")).withHeader("X-Company-Token", equalTo("company-secret-value"))
+      .withRequestBody(containing("List orders")).willReturn(okJson("{\"answer\":\"Okay\"}")));
+    input.put("prompt", "Review");
+    assertEquals("Okay", controller.send(id, input, () -> "test").path("result").path("response").asText());
+    assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> controller.send(id, input, () -> "test"));
+    server.verify(1, postRequestedFor(urlEqualTo("/company/chat")));
+    config.put("aiResponsePointer", "/different");
+    config = store.save("integrations", config, "test");
+    assertEquals("UNTESTED", controller.status(id).path("state").asText());
+  }
+
+  @Test
   void aiApiKeyAndOAuth() {
     config.put("authType", "API_KEY");
     config.put("headerName", "x-api-key");

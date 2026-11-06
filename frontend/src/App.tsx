@@ -78,7 +78,7 @@ const pageKinds: Record<string, string[]> = {
   Jira: ["stories", "runs", "integrations"],
   Governance: ["rules", "governance-runs"],
   Architecture: ["diagrams"],
-  "AI Copilot": ["integrations", "ai-drafts"],
+  "AI Copilot": ["integrations", "ai-drafts", "runs"],
   "Integration Hub": ["integrations", "events"],
   GitHub: ["integrations"],
 };
