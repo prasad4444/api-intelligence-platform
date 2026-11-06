@@ -214,7 +214,7 @@ export default function App() {
         <div className="workspace-pill">
           <span className="avatar">AI</span>
           <div>
-            Platform workspace<small>Local · persistent H2</small>
+            Platform workspace<small>Local · persistent database</small>
           </div>
           <Badge tone="green">LIVE</Badge>
         </div>
@@ -404,8 +404,8 @@ function Login({ onLogin }: { onLogin: (u: Row) => void }) {
             });
             resetCsrf();
             onLogin(await request("/me"));
-          } catch {
-            setError("Sign-in failed. Check your account and password.");
+          } catch (error) {
+            setError(error instanceof Error ? error.message : "Sign-in failed.");
           }
         }}
       >

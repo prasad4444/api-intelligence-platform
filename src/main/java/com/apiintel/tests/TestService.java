@@ -139,7 +139,7 @@ public class TestService {
     });
     for (String key : List.of("environmentId", "globalProfileId", "collectionProfileId", "collectionId")) if (env.containsKey(key)) req.put(key,env.get(key));
     if (!req.has("environmentId") && !req.has("globalProfileId") && req.toString().matches("(?s).*\\{\\{[^}]+\\}\\}.*")) throw new IllegalArgumentException("Resolve all request variables before execution");
-    var response = requests.send(req, actor);
+    var response = requests.send(req, actor, "test-run");
     var run = store.parse("{}");
     run.put("caseId", id);
     run.put("specId", t.path("specId").asText());

@@ -1,6 +1,6 @@
 # API Intelligence Platform
 
-An engineering workspace for API contracts, requests, reusable tests, delivery planning and AI integrations. A Java 17 / Spring Boot 3 monolith serves a React + TypeScript + Tailwind UI from one executable jar. Flyway manages a file-based H2 database.
+An engineering workspace for API contracts, requests, reusable tests, delivery planning and AI integrations. A Java 17 / Spring Boot 3 monolith serves a React + TypeScript + Tailwind UI from one executable jar. Flyway manages an embedded SQLite database by default.
 
 ## Run locally as one Spring Boot application
 
@@ -28,7 +28,7 @@ java -jar target/api-intelligence-platform-1.0.0-SNAPSHOT.jar
 
 Open http://localhost:8080 and sign in as `admin`. Optional accounts are `developer` and `reviewer`. There is no checked-in default password. Keep `VAULT_KEY` stable between restarts so saved credentials remain decryptable. The app binds to localhost by default and seeds a generic Commerce API, team, sprint, stories, collection, diagram and disabled connector catalog.
 
-The admin password is the value you assigned to `ADMIN_PASSWORD`. H2 creates its persistent database automatically under `data/` in the directory where you start the JAR.
+The admin password is the value you assigned to `ADMIN_PASSWORD`. SQLite creates `data/platform.sqlite` in the working directory of the JAR. SQLite workspaces start fresh, and the application does not migrate existing H2 records.
 
 ### Start again after building
 
@@ -105,9 +105,10 @@ See [integration recipes](docs/INTEGRATIONS.md) for GitHub, Devin, Jira, Friday 
 - Local accounts use BCrypt; workspace RBAC is enforced on the backend. Accounts/passwords are deployment configuration, not a multi-tenant identity directory.
 - Session authentication uses HttpOnly/SameSite=Strict cookies and CSRF-protected writes. No credentials are persisted in browser localStorage.
 - All connector use is checked against its `allowedRoles`; administrators have an override. Vault and connector changes are admin-only. Reviewers can approve actions.
-- Vault values use AES-256-GCM, fresh 96-bit IVs and secret-name authenticated data. The master key is external configuration, never saved in H2.
+- Vault values use AES-256-GCM, fresh 96-bit IVs and secret-name authenticated data. The master key is external configuration, never saved in the database.
 - H2 console is disabled. API Workspace renders uploaded contracts with the platform's own Swagger-style explorer. The platform's OpenAPI JSON remains available at `/v3/api-docs` after sign-in.
-- Database defaults to `./data/platform.mv.db`. Stop the application before taking a file backup. Preserve the corresponding vault key securely; losing it makes credentials unrecoverable.
+- Database defaults to `./data/platform.sqlite`. Stop the application cleanly before copying the database, and preserve its vault key. Existing H2 installations can explicitly set `DATABASE_URL=jdbc:h2:file:./data/platform;DB_CLOSE_ON_EXIT=FALSE` to reopen their old workspace.
+- Admin **Request and integration usage** stores redacted request outcomes and offers request-ID search. Correlation IDs in browser responses match the IntelliJ console. See [401 and 403 diagnostics](docs/INTEGRATIONS.md#diagnosing-http-401-and-403).
 - When exposing beyond localhost, terminate HTTPS at a trusted reverse proxy and enable secure cookies with `SERVER_SERVLET_SESSION_COOKIE_SECURE=true`. Use a managed secret store to inject deployment credentials.
 - Direct Request Studio credentials are ephemeral. Saved variable profiles encrypt their values in the vault; secret values are masked and resolved by the backend. Use Integration Hub for durable connector credentials. Avoid putting secrets in URL query strings, request bodies, test fixtures or versioned JSON records.
 

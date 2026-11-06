@@ -134,7 +134,7 @@ class IntegrationClientsTest {
       store.list("events").get(0).path("status").asText()
     );
     var requests = mock(com.apiintel.network.RequestService.class);
-    when(requests.send(any(), anyString())).thenReturn(
+    when(requests.send(any(), anyString(), eq("test-run"))).thenReturn(
       store.parse("{\"status\":200,\"body\":\"ok\"}")
     );
     var cases = new com.apiintel.tests.TestService(store, requests);
@@ -329,6 +329,13 @@ class IntegrationClientsTest {
     assertEquals(200, response.path("status").asInt());
     assertTrue(response.path("body").asText().contains("REDACTED"));
     assertFalse(response.toString().contains("test-vault-token-934"));
+    ((ObjectNode) saved.path("document")).remove("security");
+    saved = store.save("specs", saved, "test");
+    input.put("expectedRevision", saved.path("revision").asInt());
+    input.putObject("supplementalAuth").put("type", "bearer");
+    input.putObject("credentials").putObject("supplemental").put("secret", "token");
+    assertEquals(200, operations.execute(id, input, "test").path("status").asInt());
+
   }
 
   @Test
@@ -362,6 +369,37 @@ class IntegrationClientsTest {
     assertEquals("To Do", result.path("record").path("status").asText());
     assertEquals("ACCEPTED", result.path("draft").path("status").asText());
     assertTrue(store.list("events").isEmpty());
+  }
+
+  @Test
+  @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+  void unauthorizedLogsAreCorrelatedAndOmitSensitiveRequestData(org.springframework.boot.test.system.CapturedOutput output) {
+    var guard = mock(NetworkGuard.class);
+    when(guard.validate(anyString())).thenAnswer(invocation -> java.net.URI.create(invocation.getArgument(0)));
+    var requests = new com.apiintel.network.RequestService(guard, store);
+    server.stubFor(get(urlPathEqualTo("/restricted-path-sentinel"))
+      .withHeader("Authorization", equalTo("Bearer vault-token-sentinel"))
+      .willReturn(aResponse().withStatus(401)
+        .withHeader("WWW-Authenticate", "Bearer realm=\"private-realm-sentinel\", error=\"invalid_token\"")
+        .withBody("private-body-sentinel")));
+    var input = store.parse("{}").put("method", "GET").put("url",
+      server.baseUrl() + "/restricted-path-sentinel?token=private-query-sentinel");
+    input.putObject("headers").put("Authorization", "Bearer Bearer vault-token-sentinel");
+    org.slf4j.MDC.put("apiRequestId", "correlation-fixture");
+    try {
+      var response = requests.send(input, "test");
+      assertEquals(401, response.path("status").asInt());
+      assertEquals("correlation-fixture", response.path("requestId").asText());
+      assertEquals("bearer", response.path("diagnostic").path("authorization").asText());
+      assertEquals("invalid_token", response.path("diagnostic").path("challengeError").asText());
+    } finally {
+      org.slf4j.MDC.remove("apiRequestId");
+    }
+    assertTrue(output.getAll().contains("event=upstream_start requestId=correlation-fixture"));
+    assertTrue(output.getAll().contains("status=401 challenge=bearer reason=upstream_unauthorized:invalid_token"));
+    for (String secret : List.of("vault-token-sentinel", "private-query-sentinel", "private-body-sentinel", "private-realm-sentinel", "restricted-path-sentinel")) {
+      assertFalse(output.getAll().contains(secret), "Sensitive request data must stay out of logs");
+    }
   }
 
   @Test

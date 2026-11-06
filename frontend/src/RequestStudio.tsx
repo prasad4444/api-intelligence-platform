@@ -1,3 +1,4 @@
+import RequestDiagnostic from "./RequestDiagnostic";
 import {assignItemIds,itemAt,itemLocations,changeItems} from "./collection-tree";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -327,12 +328,18 @@ export default function RequestStudio({ data, reload, roles }: PageProps) {
         ...l.slice(-99),
         {
           time: new Date().toLocaleTimeString(),
-          message: `${snapshot.method} completed · ${result.status} · ${result.durationMs} ms`,
+          message: `${snapshot.method} completed · ${result.status} · ${result.durationMs} ms${result.requestId ? " · Request ID " + result.requestId : ""}`,
         },
       ]);
       await reload();
     } catch (e) {
-      if (!controller.signal.aborted) setError(String(e));
+      if (!controller.signal.aborted) {
+        setError(String(e));
+        setLogs(old => [...old.slice(-99), {
+          time: new Date().toLocaleTimeString(),
+          message: "Request failed before a response was available" + (e instanceof Error && "requestId" in e && e.requestId ? " · Request ID " + e.requestId : ""),
+        }]);
+      }
       else
         setNotice(
           "Request cancelled. The destination may already have processed it.",
@@ -1456,6 +1463,7 @@ export default function RequestStudio({ data, reload, roles }: PageProps) {
                 </div>
               )}
             </div>
+            {current && <RequestDiagnostic response={current} />}
             <div className="rs-response-tabs">
               {["Body", "Headers", "Test Results"].map((t) => (
                 <button

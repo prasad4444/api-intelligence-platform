@@ -1,5 +1,6 @@
 package com.apiintel.config;
 
+import com.apiintel.diagnostics.ApiRequestLog;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.*;
@@ -77,7 +78,10 @@ public class SecurityConfig {
         f
           .loginProcessingUrl("/api/login")
           .successHandler((q, s, a) -> s.setStatus(204))
-          .failureHandler((q, s, e) -> s.sendError(401))
+          .failureHandler((q, s, e) -> {
+            ApiRequestLog.securityFailure(q, s, "login_rejected");
+            s.sendError(401);
+          })
       )
       .logout(l ->
         l
@@ -85,7 +89,15 @@ public class SecurityConfig {
           .logoutSuccessHandler((q, s, a) -> s.setStatus(204))
       )
       .exceptionHandling(e ->
-        e.authenticationEntryPoint((q, s, x) -> s.sendError(401))
+        e.authenticationEntryPoint((q, s, x) -> {
+          ApiRequestLog.securityFailure(q, s, "platform_session_required");
+          s.sendError(401);
+        }).accessDeniedHandler((q, s, x) -> {
+          String reason = x instanceof MissingCsrfTokenException ? "csrf_missing"
+              : x instanceof InvalidCsrfTokenException ? "csrf_invalid" : "platform_access_denied";
+          ApiRequestLog.securityFailure(q, s, reason);
+          s.sendError(403);
+        })
       )
       .headers(h ->
         h.contentSecurityPolicy(c ->

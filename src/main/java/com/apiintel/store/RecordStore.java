@@ -97,19 +97,23 @@ public class RecordStore {
     }
     copy.put("id", id);
     copy.put("revision", rev);
-    copy.put("updatedAt", Instant.now().toString());
+    Instant now = Instant.now();
+    var timestamp = java.sql.Timestamp.from(now);
+    copy.put("updatedAt", now.toString());
     if (rev == 1) db.update(
-      "INSERT INTO records VALUES(?,?,?,?,CURRENT_TIMESTAMP)",
+      "INSERT INTO records (id,kind,revision,payload,updated_at) VALUES(?,?,?,?,?)",
       id,
       kind,
       rev,
-      copy.toString()
+      copy.toString(),
+      timestamp
     );
     else if (
       db.update(
-        "UPDATE records SET revision=?,payload=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revision=?",
+        "UPDATE records SET revision=?,payload=?,updated_at=? WHERE id=? AND revision=?",
         rev,
         copy.toString(),
+        timestamp,
         id,
         rev - 1
       ) != 1
@@ -118,10 +122,11 @@ public class RecordStore {
       "Concurrent update"
     );
     db.update(
-      "INSERT INTO revisions VALUES(?,?,?,CURRENT_TIMESTAMP)",
+      "INSERT INTO revisions (id,revision,payload,changed_at) VALUES(?,?,?,?)",
       id,
       rev,
-      copy.toString()
+      copy.toString(),
+      timestamp
     );
     audit(actor, "save:" + kind, id);
     return copy;

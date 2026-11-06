@@ -83,3 +83,18 @@ Add a custom connector, assign an exact base URL, configure its host allowlist, 
 Integration Hub includes presets for Microsoft 365 Copilot gateways, internal Stylus gateways, Devin sessions, OpenAI-compatible APIs, Anthropic Messages, and custom AI HTTP endpoints. Configure the exact approved destination and store credentials in the vault. Copilot and Stylus presets expect a compatible gateway. Devin tasks use the session action and approval queue.
 
 AI Copilot can generate editable contract suggestions, Mermaid diagrams, and Jira story drafts. Choose an enabled provider, inspect the selected contract revision and destination, and confirm sending the context. For diagrams and stories, operation scope includes the selected operation and shared components. Review records are saved locally and are visible to their creator. Applying a contract suggestion creates a new DRAFT revision, regenerates the linked artifacts, and clears the previous approval. Applying a diagram or story saves a local record. From a reviewed story, you can propose a Jira issue separately for approval. Test Library has its own reviewed test package flow.
+
+## Diagnosing HTTP 401 and 403
+
+Request Studio and the API Explorer display the request ID returned by Spring Boot. Search for that ID in the IntelliJ Run console. Outbound attempts log at INFO by default, with warnings for rejections and upstream errors. Set `APIINTEL_LOG_LEVEL=DEBUG` in your IntelliJ run configuration to include successful platform GETs.
+
+| Console event | What to check |
+| --- | --- |
+| `platform_request status=401 reason=platform_session_required` | Sign back into the platform. The request stopped at Spring Security. |
+| `platform_request status=401 reason=login_rejected` | Check the platform account and the password configured on the running instance. |
+| `platform_request status=403 reason=csrf_missing` or `csrf_invalid` | Reload or sign in again, then retry. |
+| `upstream_not_sent` | Check the indicated validation stage, destination, or credential profile. |
+| `upstream_result status=401` | The remote server responded. Match the earlier `upstream_start` line to see the authentication scheme, credential-header presence, and whether a profile was attached. Check the token's expiry, audience, and target environment. |
+| `upstream_result status=403` | Check upstream token scopes and user or service account permissions. |
+
+A contract with no security declaration can still describe an API that requires credentials. In **Try it out**, choose **Credential override for undocumented authentication**, select Bearer, Basic, or API key header, and select the saved environment and variable. The environment must allow the exact target hostname. Browser cookies are intentionally excluded by the guarded executor. The logs omit raw URL paths, query strings, header values, request or response bodies, and secrets.

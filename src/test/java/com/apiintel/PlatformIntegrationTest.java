@@ -223,6 +223,28 @@ class PlatformIntegrationTest {
       .andExpect(status().isUnauthorized());
   }
 
+  @Test
+  @org.springframework.security.test.context.support.WithAnonymousUser
+  void correlationHeadersDistinguishMissingSessionFromRejectedLogin() throws Exception {
+    var response = mvc.perform(get("/api/me").header("X-Request-ID", "untrusted-input"))
+      .andExpect(status().isUnauthorized())
+      .andExpect(header().string("X-Request-ID", org.hamcrest.Matchers.matchesPattern("[0-9a-f-]{36}")))
+      .andExpect(header().string("X-Platform-Failure", "platform_session_required")).andReturn();
+    String id = response.getResponse().getHeader("X-Request-ID");
+    mvc.perform(get("/api/usage").param("requestId", id)
+        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
+      .andExpect(status().isOk())
+      .andExpect(jsonPath("$.events[0].requestId").value(id))
+      .andExpect(jsonPath("$.events[0].reason").value("platform_session_required"))
+      .andExpect(jsonPath("$.totals.platformUnauthorized").isNumber());
+    mvc.perform(post("/api/login").with(csrf()).param("username", "admin").param("password", "wrong"))
+      .andExpect(status().isUnauthorized())
+      .andExpect(header().string("X-Platform-Failure", "login_rejected"));
+    mvc.perform(post("/api/client/send"))
+      .andExpect(status().isForbidden())
+      .andExpect(header().string("X-Platform-Failure", "csrf_missing"));
+  }
+
   String first(String kind) {
     return store.list(kind).get(0).path("id").asText();
   }
