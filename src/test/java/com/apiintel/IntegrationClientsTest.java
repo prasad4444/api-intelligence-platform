@@ -558,7 +558,7 @@ class IntegrationClientsTest {
     assertThrows(Exception.class, () -> service.save(config, "test"));
     config.put("authType", "NONE");
     config.put("baseUrl", "https://unlisted.example");
-    assertThrows(Exception.class, () -> service.save(config, "test"));
+    assertDoesNotThrow(() -> service.save(config, "test")); // host auto-approved from the connector base URL
     config.put("baseUrl", server.baseUrl());
     assertThrows(Exception.class, () ->
       service.call(config, "GET", "/../escape", null, "test")

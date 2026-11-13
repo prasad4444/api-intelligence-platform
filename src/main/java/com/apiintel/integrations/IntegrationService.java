@@ -35,26 +35,26 @@ public class IntegrationService {
   private final RecordStore store;
   private final Vault vault;
   private final NetworkGuard guard;
-  private final Set<String> hosts;
+  private final ApprovedHosts approved;
   private final String friday;
-  @Value("${platform.integration-private-hosts:}")
-  private String privateHosts = "";
 
   public IntegrationService(
     RecordStore s,
     Vault v,
     NetworkGuard g,
-    @Value("${platform.integration-hosts}") String hosts,
+    ApprovedHosts approved,
     @Value("${platform.friday-url}") String friday
   ) {
     store = s;
     vault = v;
     guard = g;
-    this.hosts = new HashSet<>();
-    for (String host : hosts.split(",")) {
-      if (!host.isBlank()) this.hosts.add(host.trim().toLowerCase(Locale.ROOT));
-    }
+    this.approved = approved;
     this.friday = friday;
+  }
+
+  /** Test helper that bootstraps a dynamic allowlist from a comma-separated host string. */
+  public IntegrationService(RecordStore s, Vault v, NetworkGuard g, String hosts, String friday) {
+    this(s, v, g, new ApprovedHosts(s, g, hosts, "", friday), friday);
   }
 
   public JsonNode chat(String id, String prompt, String actor) {
@@ -195,64 +195,18 @@ public class IntegrationService {
         c.path("jiraEmail").asText().isBlank())) {
       throw new IllegalArgumentException("Enter the Atlassian account email for a Jira Cloud API token");
     }
+    approved.approve(c.path("baseUrl").asText());
     return store.save("integrations", c, actor);
   }
 
   private URI target(ObjectNode c, String path) {
-    String base = c.path("baseUrl").asText();
-    URI root = URI.create(base);
-    if (
-      root.getHost() == null ||
-      root.getUserInfo() != null ||
-      root.getQuery() != null ||
-      root.getFragment() != null
-    ) throw new IllegalArgumentException("Invalid base URL");
-    if (
-      !path.isEmpty() &&
-      (!path.startsWith("/") ||
-        path.contains("..") ||
-        path.contains("\\") ||
-        path.contains("#"))
-    ) throw new IllegalArgumentException("Use a relative endpoint path");
-    boolean localFriday =
-      c.path("provider").asText().equals("friday") && base.equals(friday);
-    if (!localFriday) {
-      if (!hosts.contains(root.getHost().toLowerCase(Locale.ROOT))) throw new IllegalArgumentException(
-        "Host must be enabled by INTEGRATION_HOSTS on the server"
-      );
-      if(c.path("authType").asText().equals("WINDOWS")) {
-        if(windows==null)throw new IllegalArgumentException("Windows authentication transport is unavailable");
-        windows.validate(c,root);
-      } else if (privateTarget(root)) {
-        try {
-          for (var address : InetAddress.getAllByName(root.getHost())) checkAddress(root, address);
-        } catch (UnknownHostException e) {
-          throw new IllegalArgumentException("Host cannot be resolved");
-        }
-      } else guard.validate(base);
-    } else if (
-      !Set.of("http", "https").contains(root.getScheme())
-    ) throw new IllegalArgumentException("Invalid Friday scheme");
-    URI uri = URI.create(base.replaceAll("/$", "") + path);
-    if (
-      !Objects.equals(root.getHost(), uri.getHost()) ||
-      root.getPort() != uri.getPort()
-    ) throw new IllegalArgumentException(
-      "Endpoint must stay on the configured host"
-    );
-    return uri;
-  }
-
-  private boolean privateTarget(URI root) {
-    return "https".equals(root.getScheme()) && Arrays.stream(privateHosts.split(","))
-      .anyMatch(host -> host.trim().equalsIgnoreCase(root.getHost()));
-  }
-
-  private void checkAddress(URI root, InetAddress address) {
-    byte[] bytes = address.getAddress();
-    boolean privateUnicast = bytes.length == 4 && address.isSiteLocalAddress()
-      || bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
-    if (!privateTarget(root) || !privateUnicast) guard.check(address);
+    if (c.path("authType").asText().equals("WINDOWS")) {
+      if (windows == null) throw new IllegalArgumentException("Windows authentication transport is unavailable");
+      approved.approve(c.path("baseUrl").asText());
+      windows.validate(c, URI.create(c.path("baseUrl").asText()));
+      return approved.join(c, path);
+    }
+    return approved.validateConnectorBase(c, path);
   }
 
   private WebClient client(ObjectNode c) {
@@ -263,8 +217,10 @@ public class IntegrationService {
       .followRedirect(false)
       .responseTimeout(Duration.ofSeconds(30))
       .doOnConnected(x -> {
-        if (!local) checkAddress(URI.create(c.path("baseUrl").asText()),
-          ((InetSocketAddress) x.channel().remoteAddress()).getAddress());
+        if (!local) approved.checkConnectedAddress(
+          c.path("baseUrl").asText(),
+          ((InetSocketAddress) x.channel().remoteAddress()).getAddress()
+        );
       });
     return WebClient.builder()
       .clientConnector(new ReactorClientHttpConnector(http))

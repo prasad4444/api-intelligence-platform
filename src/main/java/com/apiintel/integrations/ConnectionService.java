@@ -27,17 +27,20 @@ public class ConnectionService {
   private final Vault vault;
   private final PlatformUserService users;
   private final IntegrationService integrations;
+  private final ApprovedHosts approved;
 
   public ConnectionService(
     RecordStore store,
     Vault vault,
     PlatformUserService users,
-    IntegrationService integrations
+    IntegrationService integrations,
+    ApprovedHosts approved
   ) {
     this.store = store;
     this.vault = vault;
     this.users = users;
     this.integrations = integrations;
+    this.approved = approved;
   }
 
   public List<ObjectNode> listMine(String username) {
@@ -97,6 +100,7 @@ public class ConnectionService {
     if (baseUrl.isBlank()) throw new IllegalArgumentException("Enter the provider base URL");
     URI uri = URI.create(baseUrl);
     connection.put("siteHost", uri.getHost() == null ? "" : uri.getHost());
+    approved.approve(baseUrl);
     String credential = input.path("credential").asText("");
     connection = store.save("connections", connection, username);
     if (!credential.isBlank()) {

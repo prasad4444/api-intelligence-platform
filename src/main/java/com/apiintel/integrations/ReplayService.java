@@ -1,7 +1,6 @@
 package com.apiintel.integrations;
 
 import com.apiintel.diagnostics.ApiRequestLog;
-import com.apiintel.network.NetworkGuard;
 import com.apiintel.security.Vault;
 import com.apiintel.store.RecordStore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,10 +10,8 @@ import java.net.URI;
 import java.net.http.*;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -23,10 +20,8 @@ public class ReplayService {
   private final RecordStore store;
   private final Vault vault;
   private final ConnectionService connections;
-  private final NetworkGuard guard;
+  private final ApprovedHosts approved;
   private final ObjectMapper json = new ObjectMapper();
-  private final Set<String> hosts;
-  private final Set<String> privateHosts;
   private final ConcurrentHashMap<String, Object> refreshLocks = new ConcurrentHashMap<>();
   private final ThreadLocal<Boolean> browserStarted = ThreadLocal.withInitial(() -> false);
 
@@ -34,16 +29,12 @@ public class ReplayService {
     RecordStore store,
     Vault vault,
     ConnectionService connections,
-    NetworkGuard guard,
-    @Value("${platform.integration-hosts}") String hosts,
-    @Value("${platform.integration-private-hosts:}") String privateHosts
+    ApprovedHosts approved
   ) {
     this.store = store;
     this.vault = vault;
     this.connections = connections;
-    this.guard = guard;
-    this.hosts = split(hosts);
-    this.privateHosts = split(privateHosts);
+    this.approved = approved;
   }
 
   public boolean browserStartedDuringReplay() {
@@ -310,23 +301,7 @@ public class ReplayService {
   }
 
   private void enforceDestination(URI uri, ObjectNode connection) {
-    if (!Set.of("http", "https").contains(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null) {
-      throw new IllegalArgumentException("Invalid replay URL");
-    }
-    String host = uri.getHost().toLowerCase(Locale.ROOT);
-    String site = connection.path("siteHost").asText("").toLowerCase(Locale.ROOT);
-    String originHost = URI.create(savedBase(connection)).getHost();
-    if (originHost != null && !originHost.equalsIgnoreCase(host) && !host.equals(site)
-        && !hosts.contains(host) && !privateHosts.contains(host)) {
-      throw new IllegalArgumentException("Blocked replay destination");
-    }
-    if (!hosts.contains(host) && !privateHosts.contains(host) && !host.equals(site)) {
-      guard.validate(uri.toString());
-    }
-  }
-
-  private String savedBase(ObjectNode connection) {
-    return connection.path("baseUrl").asText("https://example.invalid");
+    approved.enforce(uri.toString(), connection);
   }
 
   private boolean isExpiry(HttpResponse<String> response) {
@@ -346,13 +321,6 @@ public class ReplayService {
     result.putNull("data");
     result.putObject("error").put("code", code).put("message", message);
     return result;
-  }
-
-  private Set<String> split(String value) {
-    var out = new HashSet<String>();
-    if (value == null) return out;
-    for (String part : value.split(",")) if (!part.isBlank()) out.add(part.trim().toLowerCase(Locale.ROOT));
-    return out;
   }
 
   static class SessionExpiredException extends RuntimeException {
