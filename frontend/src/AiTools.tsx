@@ -4,6 +4,7 @@ import { post, request, pretty, type Row } from "./api";
 import { Badge, Field, Panel } from "./components";
 import { listOperations } from "./endpoint-model";
 import { supportsChat } from "./AiDraftReview";
+import { PersonalConnections } from "./PersonalConnections";
 import type { PageProps } from "./App";
 
 const providers = [
@@ -13,20 +14,25 @@ const providers = [
   ["stylus", "Stylus"],
 ] as const;
 
-export default function AiTools({ data, spec, roles, renderEditor }: Pick<PageProps, "data" | "spec" | "roles"> & {
+export default function AiTools({ data, spec, roles, renderEditor, reload }: Pick<PageProps, "data" | "spec" | "roles" | "reload"> & {
   renderEditor: (connection: Row, onClose: () => void, onSaved: (saved: Row) => void) => ReactNode;
 }) {
   const [active, setActive] = useState<string>(providers[0][0]);
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [editor, setEditor] = useState<Row>();
-  const all = data.integrations || [];
+  const all = [...(data.connections || []), ...(data.integrations || [])];
   const tabs = [...providers.map(([id, name]) => ({ id, name })), ...Array.from(new Map(
     all.filter(item => supportsChat(item) && !providers.some(([id]) => id === item.provider))
       .map(item => [String(item.provider), {id: String(item.provider), name: String(item.provider)}]),
   ).values())];
   const tab = tabs.find(item => item.id === active) || tabs[0];
-  const connections = all.filter(item => item.provider === tab.id);
-  const connection = connections.find(item => item.id === selected[tab.id]) || connections.find(item => item.enabled) || connections[0];
+  const personal = (data.connections || []).filter(item => item.provider === tab.id);
+  const shared = (data.integrations || []).filter(item => item.provider === tab.id);
+  const connections = [...personal, ...shared];
+  const connection = connections.find(item => item.id === selected[tab.id])
+    || personal.find(item => item.state === "CONNECTED")
+    || connections.find(item => item.enabled)
+    || connections[0];
   const canEdit = roles?.includes("ROLE_ADMIN");
   const newConnection = () => setEditor({
     provider: tab.id, name: tab.name + " company connection", baseUrl: "", enabled: true,
@@ -34,7 +40,8 @@ export default function AiTools({ data, spec, roles, renderEditor }: Pick<PagePr
     aiMethod: "POST", aiHeaders: {}, aiResponseFormat: "json",
   });
   return <section className="ai-tools" aria-label="AI Tools">
-    <Panel title="AI Tools" action={<Badge tone="purple">COMPANY CONNECTIONS</Badge>}>
+    <PersonalConnections connections={personal} providerFilter={tab.id} onChange={() => void reload?.(["connections"])} />
+    <Panel title="AI Tools" action={<Badge tone="purple">COMPANY + PERSONAL</Badge>}>
       <div className="ai-provider-tabs" role="tablist" aria-label="AI providers"
         onKeyDown={event => {
           const index = tabs.findIndex(item => item.id === tab.id);

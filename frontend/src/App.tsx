@@ -70,17 +70,18 @@ const descriptions: Record<string, string> = {
   Admin: "Access policies, encrypted secrets and traceable changes.",
 };
 const pageKinds: Record<string, string[]> = {
-  Dashboard: ["tests", "runs", "stories", "integrations", "events"],
+  Dashboard: ["tests", "runs", "stories", "integrations", "events", "connections"],
   "API Workspace": ["environments", "collections", "tests", "runs"],
   "Request Studio": ["environments", "collections", "history"],
-  "Test Library": ["environments", "tests", "suites", "plans", "runs", "integrations"],
+  "Test Library": ["environments", "tests", "suites", "plans", "runs", "integrations", "connections"],
   "Team Capacity": ["team", "sprints", "leaves", "holidays", "stories"],
-  Jira: ["stories", "runs", "integrations"],
+  Jira: ["stories", "runs", "integrations", "connections"],
   Governance: ["rules", "governance-runs"],
   Architecture: ["diagrams"],
-  "AI Copilot": ["integrations", "ai-drafts", "runs"],
-  "Integration Hub": ["integrations", "events"],
-  GitHub: ["integrations"],
+  "AI Copilot": ["integrations", "ai-drafts", "runs", "connections"],
+  "Integration Hub": ["integrations", "events", "connections"],
+  GitHub: ["integrations", "connections"],
+  Admin: [],
 };
 export type PageProps = {
   data: Record<string, Row[]>;
@@ -139,7 +140,11 @@ export default function App() {
     const entries = await Promise.all([...new Set(kinds)].map(async kind => {
       const sequence = (fetchSequence.current[kind] || 0) + 1;
       fetchSequence.current[kind] = sequence;
-      const rows = await request(kind === "environments" || kind === "ai-drafts" ? "/" + kind : "/records/" + kind);
+      const rows = await request(
+        kind === "environments" || kind === "ai-drafts" ? "/" + kind
+          : kind === "connections" ? "/connections"
+          : "/records/" + kind
+      );
       return {kind, sequence, rows};
     }));
     if (session !== sessionSequence.current) return;

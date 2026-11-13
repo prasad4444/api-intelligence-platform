@@ -1,4 +1,5 @@
 import AiTools from "./AiTools";
+import { PersonalConnections, AdminUsers } from "./PersonalConnections";
 import { importAiCurl, exportAiCurl } from "./ai-curl";
 import UsageHistory from "./UsageHistory";
 import EndpointBrowser from "./EndpointBrowser";
@@ -799,20 +800,23 @@ export function Capacity({ data, run, edit }: PageProps) {
     </>
   );
 }
-export function Jira({ data, run, edit }: PageProps) {
+export function Jira({ data, run, edit, reload }: PageProps) {
   const [jql, setJql] = useState("project = DEMO ORDER BY updated DESC"),
     [result, setResult] = useState<unknown>(null),
     [selected, setSelected] = useState<string[]>([]),
     [jiraId, setJiraId] = useState(""),
     [status, setStatus] = useState("To Do");
-  const connections = data.integrations?.filter((c) => c.provider === "jira") || [];
-  const connection = connections.find(c => c.id === jiraId) || connections.find(c => c.enabled) || connections[0];
+  const personal = (data.connections || []).filter((c) => c.provider === "jira");
+  const shared = data.integrations?.filter((c) => c.provider === "jira") || [];
+  const connections = [...personal, ...shared];
+  const connection = connections.find(c => c.id === jiraId) || personal.find(c => c.state === "CONNECTED") || connections.find(c => c.enabled) || connections[0];
   return (
     <>
+      <PersonalConnections connections={personal} providerFilter="jira" onChange={() => void reload(["connections"])} />
       <Panel title="Jira search">
         {connections.length > 0 && <Field label="Jira connection">
           <select value={connection?.id || ""} onChange={event => setJiraId(event.target.value)}>
-            {connections.map(c => <option key={c.id} value={c.id}>{c.name}{c.enabled ? "" : " · disabled"}</option>)}
+            {connections.map(c => <option key={c.id} value={c.id}>{c.owner ? "My · " : "Shared · "}{c.name}{c.state ? " · " + c.state : c.enabled ? "" : " · disabled"}</option>)}
           </select>
         </Field>}
         <label className="button">
@@ -1140,7 +1144,7 @@ const connectorPresets: Record<string, Row> = {
   "Anthropic Messages": {provider:"anthropic", baseUrl:"https://api.anthropic.com", authType:"API_KEY", headerName:"x-api-key"},
   "Custom AI HTTP endpoint": {provider:"custom", authType:"AUTHORIZATION", aiChatEnabled:true, testGenerationEnabled:true},
 };
-export function Integrations({ data, run, edit }: PageProps) {
+export function Integrations({ data, run, edit, reload }: PageProps) {
   const [connectionId, setConnectionId] = useState("");
   const [selected, setSelected] = useState<Row | null>(null),
     [secret, setSecret] = useState(""),
@@ -1153,6 +1157,7 @@ export function Integrations({ data, run, edit }: PageProps) {
   const [tab, setTab] = useState("Connections");
   return (
     <>
+      <PersonalConnections connections={data.connections || []} onChange={() => void reload(["connections"])} />
       <div className="integration-hero">
         <div className="integration-symbol">
           <PlugZap size={38} />
@@ -1485,8 +1490,10 @@ export function Integrations({ data, run, edit }: PageProps) {
     </>
   );
 }
-export function GitHubPage({ data, run }: PageProps) {
-  const c = data.integrations?.find((i) => i.provider === "github"),
+export function GitHubPage({ data, run, reload }: PageProps) {
+  const personal = (data.connections || []).filter((i) => i.provider === "github");
+  const shared = data.integrations?.filter((i) => i.provider === "github") || [];
+  const [githubId, setGithubId] = useState(""),
     [repo, setRepo] = useState("owner/repository"),
     [path, setPath] = useState(""),
     [result, setResult] = useState<unknown>(null),
@@ -1495,6 +1502,11 @@ export function GitHubPage({ data, run }: PageProps) {
     [content, setContent] = useState(""),
     [title, setTitle] = useState("Update API contract"),
     [jira, setJira] = useState("");
+  const c = [...personal, ...shared].find(i => i.id === githubId)
+    || personal.find(i => i.state === "CONNECTED")
+    || shared.find(i => i.enabled)
+    || personal[0]
+    || shared[0];
   function propose(action: Row) {
     return run(async () =>
       setResult(await post("/integrations/" + c?.id + "/proposals", action)),
@@ -1502,7 +1514,11 @@ export function GitHubPage({ data, run }: PageProps) {
   }
   return (
     <>
+      <PersonalConnections connections={personal} providerFilter="github" onChange={() => void reload(["connections"])} />
       <Panel title="Repository browser">
+        {(personal.length + shared.length) > 1 && <Field label="GitHub connection"><select value={c?.id || ""} onChange={e => setGithubId(e.target.value)}>
+          {[...personal, ...shared].map(item => <option key={item.id} value={item.id}>{item.owner ? "My · " : "Shared · "}{item.name}</option>)}
+        </select></Field>}
         <div className="toolbar">
           <input
             aria-label="GitHub repository"
@@ -1690,7 +1706,7 @@ export function Copilot(props: PageProps) {
   const friday = data.integrations?.find((c) => c.provider === "friday");
   return (
     <>
-    <AiTools data={data} spec={spec} roles={roles} renderEditor={(value, close, select) =>
+    <AiTools data={data} spec={spec} roles={roles} reload={reload} renderEditor={(value, close, select) =>
       <ConnectorEditor value={value} onClose={close} referencesOnly onSave={async config => {
         const saved = await post("/integrations", config);
         await reload(["integrations"]);
@@ -1833,6 +1849,7 @@ export function Admin({ run, roles }: PageProps) {
   const [audit, setAudit] = useState<unknown>(null);
   return (
     <>
+      {(!roles || roles.includes("ROLE_ADMIN")) && <AdminUsers />}
       <div className="two-cols">
         <Panel title="Authentication and authorization">
           <h2>One entry point. Explicit permissions.</h2>

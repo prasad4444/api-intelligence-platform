@@ -6,7 +6,32 @@ An engineering workspace for API contracts, requests, reusable tests, delivery p
 
 The production build runs the backend and React UI together from **one executable Spring Boot JAR**. You do not need a separate frontend server, Node process or external database at runtime.
 
-For the initial build, install **Java 17**, **Maven 3.9+**, **Node 22+**, and npm. Extract the source ZIP and open a terminal inside the `api-intelligence-platform` folder. On Windows, the following commands work in **Git Bash**.
+For the initial build, install **Java 17**, **Maven 3.9+**, **Node 22+**, and npm. Extract the source ZIP and open a terminal inside the `api-intelligence-platform` folder. On Windows, use **PowerShell** (below) or Git Bash.
+
+### Windows PowerShell quick start
+
+```powershell
+git clone https://github.com/prasad4444/api-intelligence-platform.git
+cd api-intelligence-platform
+git checkout feat/personal-connections-discovery
+
+# Generate VAULT_KEY once and reuse it (do not regenerate on each start)
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:VAULT_KEY = [Convert]::ToBase64String($bytes)
+$env:ADMIN_PASSWORD = 'choose-a-long-unique-password'
+$env:DEVELOPER_PASSWORD = 'choose-a-different-password'
+$env:REVIEWER_PASSWORD = 'choose-another-password'
+$env:INTEGRATION_HOSTS = 'api.github.com,your.jira.host,your.ai.gateway'
+
+mvn clean verify
+mvn -q exec:java "-Dexec.mainClass=com.microsoft.playwright.CLI" "-Dexec.args=install chromium"
+java -jar target/api-intelligence-platform-1.0.0-SNAPSHOT.jar
+```
+
+Open http://localhost:8080 and sign in as `admin`. Provision individual users under **Admin**, then each person connects their own Jira/GitHub/AI accounts. SQLite persists at `./data/platform.sqlite`. Keep the same `VAULT_KEY` so encrypted credentials remain readable. See [Personal connections, discovery and replay](docs/PERSONAL_CONNECTIONS.md).
+
+### Git Bash / macOS / Linux
 
 Generate a vault encryption key **once**:
 
@@ -23,12 +48,13 @@ export VAULT_KEY='paste-your-saved-base64-32-byte-key-here'
 export DEVELOPER_PASSWORD='choose-a-different-password'
 export REVIEWER_PASSWORD='choose-another-password'
 mvn clean verify
+mvn -q exec:java -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install chromium"
 java -jar target/api-intelligence-platform-1.0.0-SNAPSHOT.jar
 ```
 
 Open http://localhost:8080 and sign in as `admin`. Optional accounts are `developer` and `reviewer`. There is no checked-in default password. Keep `VAULT_KEY` stable between restarts so saved credentials remain decryptable. The app binds to localhost by default and seeds a generic Commerce API, team, sprint, stories, collection, diagram and disabled connector catalog.
 
-The admin password is the value you assigned to `ADMIN_PASSWORD`. SQLite creates `data/platform.sqlite` in the working directory of the JAR. SQLite workspaces start fresh, and the application does not migrate existing H2 records.
+The admin password is the value you assigned to `ADMIN_PASSWORD`. SQLite creates `data/platform.sqlite` in the working directory of the JAR. Existing SQLite files are upgraded with Flyway forward migrations (`V3__personal_connections.sql`). The application does not migrate existing H2 records into SQLite.
 
 ### Start again after building
 

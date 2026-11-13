@@ -414,7 +414,12 @@ class IntegrationClientsTest {
     var spec = store.save("specs", store.parse("""
       {"name":"Orders","document":{"openapi":"3.1.0","paths":{"/orders":{"get":{"summary":"List orders","example":"private-example"}}}}}
       """), "test");
-    var controller = new com.apiintel.integrations.AiToolsController(store, service);
+    var controller = new com.apiintel.integrations.AiToolsController(
+      store,
+      service,
+      org.mockito.Mockito.mock(com.apiintel.integrations.ConnectionService.class),
+      org.mockito.Mockito.mock(com.apiintel.integrations.ReplayService.class)
+    );
     var input = store.parse("{}").put("connectionRevision", config.path("revision").asInt())
       .put("scope", "operation").put("operation", "GET /orders")
       .put("specId", spec.path("id").asText()).put("specRevision", spec.path("revision").asInt())
