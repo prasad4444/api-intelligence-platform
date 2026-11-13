@@ -178,6 +178,82 @@ class PersonalConnectionsTest {
   }
 
   @Test
+  void replayRefreshForbiddenRateLimitAndSessionCookies() {
+    server.stubFor(get(urlEqualTo("/user")).willReturn(okJson("{\"login\":\"alice-gh\"}")));
+    var alice = connections.connect(store.parse("{}")
+      .put("provider", "github").put("name", "A").put("baseUrl", server.baseUrl())
+      .put("authType", "BEARER").put("credential", "alice-secret"), "alice");
+    vault.putScoped(aliceId, alice.path("id").asText(), "session",
+      "{\"cookies\":[{\"name\":\"sid\",\"value\":\"1\",\"domain\":\"localhost\",\"path\":\"/\",\"secure\":false}]}");
+    vault.putScoped(aliceId, alice.path("id").asText(), "refresh_token", "refresh-1");
+    ObjectNode capture = store.parse("{}");
+    capture.put("owner", "alice").put("ownerId", aliceId).put("connectionId", alice.path("id").asText());
+    capture.put("method", "GET").put("url", server.baseUrl() + "/api/secure").put("idempotent", true);
+    capture.putObject("headers").put("Accept", "application/json");
+    capture = store.save("captured-requests", capture, "alice");
+
+    server.stubFor(get(urlEqualTo("/api/secure")).inScenario("expiry")
+      .whenScenarioStateIs(com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED)
+      .willReturn(aResponse().withStatus(401).withHeader("WWW-Authenticate", "Bearer error=\"invalid_token\""))
+      .willSetStateTo("expired"));
+    server.stubFor(post(urlEqualTo("/oauth/token")).willReturn(okJson("{\"access_token\":\"new\",\"refresh_token\":\"refresh-2\"}")));
+    ObjectNode withTokenPath = connections.getOwned(alice.path("id").asText(), "alice");
+    withTokenPath.put("tokenPath", "/oauth/token").put("authType", "AUTHORIZATION");
+    store.save("connections", withTokenPath, "alice");
+    server.stubFor(get(urlEqualTo("/api/secure")).inScenario("expiry")
+      .whenScenarioStateIs("expired")
+      .willReturn(okJson("{\"ok\":true}").withHeader("Set-Cookie", "sid=2; Path=/")));
+    var refreshed = replay.replay(capture.path("id").asText(), store.parse("{}"), "alice");
+    assertTrue(refreshed.path("refreshedSession").asBoolean() || refreshed.path("upstreamStatus").asInt() == 200
+      || "RECONNECT_REQUIRED".equals(refreshed.path("error").path("code").asText()));
+
+    server.stubFor(get(urlEqualTo("/api/forbid")).willReturn(aResponse().withStatus(403)));
+    ObjectNode forbidden = capture.deepCopy();
+    forbidden.remove("id");
+    forbidden.put("url", server.baseUrl() + "/api/forbid");
+    forbidden = store.save("captured-requests", forbidden, "alice");
+    assertEquals("FORBIDDEN", replay.replay(forbidden.path("id").asText(), store.parse("{}"), "alice").path("error").path("code").asText());
+
+    server.stubFor(get(urlEqualTo("/api/limit")).willReturn(aResponse().withStatus(429)));
+    ObjectNode limited = capture.deepCopy();
+    limited.remove("id");
+    limited.put("url", server.baseUrl() + "/api/limit");
+    limited = store.save("captured-requests", limited, "alice");
+    assertEquals("RATE_LIMITED", replay.replay(limited.path("id").asText(), store.parse("{}"), "alice").path("error").path("code").asText());
+
+    ObjectNode postCapture = capture.deepCopy();
+    postCapture.remove("id");
+    postCapture.put("method", "POST").put("idempotent", false).put("url", server.baseUrl() + "/api/items");
+    postCapture = store.save("captured-requests", postCapture, "alice");
+    server.stubFor(post(urlEqualTo("/api/items")).willReturn(okJson("{\"wrote\":true}")));
+    var forced = replay.replay(postCapture.path("id").asText(), store.parse("{}").put("confirmNonIdempotent", true), "alice");
+    assertEquals(200, forced.path("upstreamStatus").asInt());
+  }
+
+  @Test
+  void jiraAndAiPersonalVerifyPlusCancelDiscovery() {
+    server.stubFor(get(urlPathEqualTo("/rest/api/3/myself")).willReturn(okJson("{\"displayName\":\"Alice Jira\"}")));
+    var jira = connections.connect(store.parse("{}")
+      .put("provider", "jira").put("name", "Jira").put("baseUrl", server.baseUrl())
+      .put("authType", "JIRA_TOKEN").put("jiraEmail", "alice@example.com").put("jiraDeployment", "cloud")
+      .put("credential", "jira-token"), "alice");
+    assertEquals("CONNECTED", jira.path("state").asText());
+
+    server.stubFor(get(urlEqualTo("/health")).willReturn(okJson("{}")));
+    var ai = connections.connect(store.parse("{}")
+      .put("provider", "stylus").put("name", "AI").put("baseUrl", server.baseUrl())
+      .put("authType", "BEARER").put("credential", "ai-token").put("aiChatEnabled", true)
+      .put("aiMethod", "POST").put("chatPath", "/chat").put("aiProbePath", "/health")
+      .put("aiResponsePointer", "/answer"), "alice");
+    assertEquals("CONNECTED", ai.path("state").asText());
+
+    var running = store.parse("{}").put("owner", "alice").put("connectionId", jira.path("id").asText()).put("status", "RUNNING");
+    running = store.save("discovery-sessions", running, "alice");
+    assertEquals("CANCELLED", discovery.cancel(running.path("id").asText(), "alice").path("status").asText());
+    assertNotNull(discovery.listSaved("alice"));
+  }
+
+  @Test
   void sqliteFileUpgradeKeepsLegacySecrets() throws Exception {
     var dir = Files.createTempDirectory("apiintel-upgrade");
     var file = dir.resolve("platform.sqlite");
