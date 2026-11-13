@@ -1,5 +1,7 @@
 # Personal connections, discovery and replay
 
+Build and run with **JDK 17** (`java.version` / `maven.compiler.release` are pinned to 17). A newer JDK can compile the project, but the supported runtime for local Windows installs is Java 17.
+
 ## Individual platform accounts
 
 Platform users are stored in SQLite (`platform_users`). Bootstrap accounts (`admin`, optional `developer` / `reviewer`) are created or refreshed from `ADMIN_PASSWORD`, `DEVELOPER_PASSWORD` and `REVIEWER_PASSWORD` at startup. Admins provision additional users under **Admin → Platform accounts**.

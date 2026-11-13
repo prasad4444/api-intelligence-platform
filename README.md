@@ -10,10 +10,17 @@ For the initial build, install **Java 17**, **Maven 3.9+**, **Node 22+**, and np
 
 ### Windows PowerShell quick start
 
+Requires **JDK 17** (not JRE 8). Point `JAVA_HOME` at a JDK 17 install before Maven:
+
 ```powershell
 git clone https://github.com/prasad4444/api-intelligence-platform.git
 cd api-intelligence-platform
 git checkout feat/personal-connections-discovery
+
+# Java 17 only — example Temurin path; adjust if yours differs
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-17.0.21.9-hotspot'
+$env:Path = "$env:JAVA_HOME\bin;" + $env:Path
+java -version   # should report 17.x
 
 # Generate VAULT_KEY once and reuse it (do not regenerate on each start)
 $bytes = New-Object byte[] 32
