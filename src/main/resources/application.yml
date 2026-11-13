@@ -28,7 +28,8 @@ platform:
   vault-key: ${VAULT_KEY:}
   seed: ${SEED_DEMO:true}
   friday-url: ${FRIDAY_URL:http://localhost:18080}
-  integration-hosts: ${INTEGRATION_HOSTS:api.github.com}
+  # Optional bootstrap only. Saving a connector or personal connection auto-approves its host.
+  integration-hosts: ${INTEGRATION_HOSTS:}
   integration-private-hosts: ${INTEGRATION_PRIVATE_HOSTS:}
   windows-auth-hosts: ${WINDOWS_AUTH_HOSTS:}
   windows-curl: ${WINDOWS_CURL:curl.exe}

@@ -1,6 +1,5 @@
 package com.apiintel.integrations;
 
-import com.apiintel.network.NetworkGuard;
 import com.apiintel.security.Vault;
 import com.apiintel.store.RecordStore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,7 +10,6 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -23,9 +21,7 @@ public class DiscoveryService {
   private final RecordStore store;
   private final Vault vault;
   private final ConnectionService connections;
-  private final NetworkGuard guard;
-  private final Set<String> hosts;
-  private final Set<String> privateHosts;
+  private final ApprovedHosts approved;
   private final Map<String, AtomicBoolean> cancelled = new ConcurrentHashMap<>();
   private CaptureTransport transport = new PlaywrightCaptureTransport();
 
@@ -33,16 +29,12 @@ public class DiscoveryService {
     RecordStore store,
     Vault vault,
     ConnectionService connections,
-    NetworkGuard guard,
-    @Value("${platform.integration-hosts}") String hosts,
-    @Value("${platform.integration-private-hosts:}") String privateHosts
+    ApprovedHosts approved
   ) {
     this.store = store;
     this.vault = vault;
     this.connections = connections;
-    this.guard = guard;
-    this.hosts = split(hosts);
-    this.privateHosts = split(privateHosts);
+    this.approved = approved;
   }
 
   public void transport(CaptureTransport transport) {
@@ -187,31 +179,16 @@ public class DiscoveryService {
   }
 
   URI approveNavigation(String url, ObjectNode connection) {
-    URI uri = URI.create(url);
-    if (!Set.of("http", "https").contains(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null) {
-      throw new IllegalArgumentException("Use an HTTP(S) URL without embedded credentials");
-    }
-    enforceHost(uri, connection);
-    return uri;
+    approved.enforce(url, connection);
+    return URI.create(url);
   }
 
   void approveSubrequest(String url) {
     URI uri = URI.create(url);
     if (uri.getHost() == null) throw new IllegalArgumentException("Invalid discovery subrequest");
-    if (!hosts.contains(uri.getHost().toLowerCase(Locale.ROOT))
-        && !privateHosts.contains(uri.getHost().toLowerCase(Locale.ROOT))) {
+    if (!approved.allows(uri.getHost())) {
       throw new IllegalArgumentException("Blocked discovery destination: " + uri.getHost());
     }
-  }
-
-  private void enforceHost(URI uri, ObjectNode connection) {
-    String host = uri.getHost().toLowerCase(Locale.ROOT);
-    String site = connection.path("siteHost").asText("").toLowerCase(Locale.ROOT);
-    if (!hosts.contains(host) && !privateHosts.contains(host) && !host.equals(site)) {
-      throw new IllegalArgumentException("Host must be enabled by INTEGRATION_HOSTS or approved on the connection");
-    }
-    if (privateHosts.contains(host)) return;
-    if (!host.equals(site)) guard.validate(uri.toString());
   }
 
   private ObjectNode redactCapture(ObjectNode capture) {
@@ -241,13 +218,6 @@ public class DiscoveryService {
       view.put("cookiePreview", "REDACTED");
     }
     return view;
-  }
-
-  private Set<String> split(String value) {
-    var out = new HashSet<String>();
-    if (value == null) return out;
-    for (String part : value.split(",")) if (!part.isBlank()) out.add(part.trim().toLowerCase(Locale.ROOT));
-    return out;
   }
 
   public record CaptureResult(List<ObjectNode> captures, String sessionState, boolean browserUsed) {}

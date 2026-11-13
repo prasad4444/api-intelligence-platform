@@ -29,7 +29,7 @@ $env:VAULT_KEY = [Convert]::ToBase64String($bytes)
 $env:ADMIN_PASSWORD = 'choose-a-long-unique-password'
 $env:DEVELOPER_PASSWORD = 'choose-a-different-password'
 $env:REVIEWER_PASSWORD = 'choose-another-password'
-$env:INTEGRATION_HOSTS = 'api.github.com,your.jira.host,your.ai.gateway'
+# INTEGRATION_HOSTS is optional. Saving/connecting a connector auto-approves its host.
 
 mvn clean verify
 mvn -q exec:java "-Dexec.mainClass=com.microsoft.playwright.CLI" "-Dexec.args=install chromium"
@@ -121,13 +121,14 @@ Use **Ctrl+K / Cmd+K** to jump between modules. Theme preference persists locall
 
 Configure tools under **Integration Hub → Manage connection**. Credentials are encrypted in the vault and referenced by name; the application never offers an endpoint to retrieve their plaintext. For Basic authentication store `username:password`; for Bearer/PAT/API-key authentication store the token itself. Supplying a new credential rotates it.
 
-Enable approved destination hosts on the server, for example:
+Destination hosts are approved automatically when you **save a connector** or **connect a personal account** (from that connector’s `baseUrl`). `INTEGRATION_HOSTS` / `INTEGRATION_PRIVATE_HOSTS` are optional bootstrap lists only.
 
 ```bash
-export INTEGRATION_HOSTS='api.github.com,api.devin.ai,api.openai.com,api.anthropic.com,your-instance.atlassian.net'
+# Optional bootstrap (usually unnecessary):
+# export INTEGRATION_HOSTS='api.github.com'
 ```
 
-Generic requests block private destinations. Connectors can use private HTTPS services when their exact host appears in both `INTEGRATION_HOSTS` and `INTEGRATION_PRIVATE_HOSTS`. The Friday daemon continues to use the exact server-configured `FRIDAY_URL`. The server checks DNS answers and the connected peer, refuses redirect following, caps buffered responses at 2 MB and applies timeouts.
+Generic Request Studio calls still block private destinations. Connector traffic to a private host is allowed after that host is saved/connected (or listed in `INTEGRATION_PRIVATE_HOSTS`). The Friday daemon continues to use the exact server-configured `FRIDAY_URL`. The server checks DNS answers and the connected peer, refuses redirect following, caps buffered responses at 2 MB and applies timeouts.
 
 **Writes:** propose the exact method/path/body → inspect it in Approval queue → reviewer approves → authorized operator executes once. A changed connector revision invalidates its earlier approvals. Failure consumes the approval to avoid accidental duplicate writes; inspect provider state before proposing a retry. AI chat requests can incur provider charges and are initiated directly by the user.
 

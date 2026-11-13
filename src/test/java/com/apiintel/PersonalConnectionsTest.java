@@ -57,10 +57,11 @@ class PersonalConnectionsTest {
     var guard = org.mockito.Mockito.mock(NetworkGuard.class);
     org.mockito.Mockito.when(guard.validate(org.mockito.ArgumentMatchers.anyString()))
       .thenAnswer(a -> java.net.URI.create(a.getArgument(0)));
-    integrations = new IntegrationService(store, vault, guard, "localhost", "http://localhost:18080");
-    connections = new ConnectionService(store, vault, users, integrations);
-    discovery = new DiscoveryService(store, vault, connections, guard, "localhost", "");
-    replay = new ReplayService(store, vault, connections, guard, "localhost", "");
+    var approved = new ApprovedHosts(store, guard, "", "", "http://localhost:18080");
+    integrations = new IntegrationService(store, vault, guard, approved, "http://localhost:18080");
+    connections = new ConnectionService(store, vault, users, integrations, approved);
+    discovery = new DiscoveryService(store, vault, connections, approved);
+    replay = new ReplayService(store, vault, connections, approved);
     discovery.transport((url, interactive, cancelled, approve) -> {
       approve.accept(server.baseUrl() + "/api/items");
       ObjectNode capture = store.parse("{}");
@@ -113,9 +114,10 @@ class PersonalConnectionsTest {
     var guard = org.mockito.Mockito.mock(NetworkGuard.class);
     org.mockito.Mockito.when(guard.validate(org.mockito.ArgumentMatchers.anyString()))
       .thenAnswer(a -> java.net.URI.create(a.getArgument(0)));
-    var integrations2 = new IntegrationService(store, vault, guard, "localhost", "http://localhost:18080");
-    var connections2 = new ConnectionService(store, vault, users, integrations2);
-    var replay2 = new ReplayService(store, vault, connections2, guard, "localhost", "");
+    var approved2 = new ApprovedHosts(store, guard, "", "", "http://localhost:18080");
+    var integrations2 = new IntegrationService(store, vault, guard, approved2, "http://localhost:18080");
+    var connections2 = new ConnectionService(store, vault, users, integrations2, approved2);
+    var replay2 = new ReplayService(store, vault, connections2, approved2);
     asUser("alice", "DEVELOPER");
     var result = replay2.replay(captureId, store.parse("{}"), "alice");
     assertEquals(200, result.path("upstreamStatus").asInt());
@@ -251,6 +253,26 @@ class PersonalConnectionsTest {
     running = store.save("discovery-sessions", running, "alice");
     assertEquals("CANCELLED", discovery.cancel(running.path("id").asText(), "alice").path("status").asText());
     assertNotNull(discovery.listSaved("alice"));
+  }
+
+  @Test
+  void savingConnectorAutoApprovesHostWithoutProperties() {
+    var guard = org.mockito.Mockito.mock(NetworkGuard.class);
+    org.mockito.Mockito.when(guard.validate(org.mockito.ArgumentMatchers.anyString()))
+      .thenAnswer(a -> java.net.URI.create(a.getArgument(0)));
+    var approved = new ApprovedHosts(store, guard, "", "", "http://localhost:18080");
+    var service = new IntegrationService(store, vault, guard, approved, "http://localhost:18080");
+    assertFalse(approved.allows("jira.example.com"));
+    var connector = store.parse("{}");
+    connector.put("name", "Jira Cloud");
+    connector.put("provider", "jira");
+    connector.put("baseUrl", "https://jira.example.com");
+    connector.put("authType", "NONE");
+    connector.put("enabled", false);
+    connector.putArray("allowedRoles").add("ADMIN");
+    asUser("admin", "ADMIN");
+    service.save(connector, "admin");
+    assertTrue(approved.allows("jira.example.com"));
   }
 
   @Test

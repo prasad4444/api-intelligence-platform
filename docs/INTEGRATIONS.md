@@ -1,6 +1,6 @@
 # Integration recipes
 
-All provider keys live in Integration Hub. They are separate from platform login credentials. Give tokens only the scopes necessary for intended operations. Configure host allowlists in the deployment, then save and enable the connector.
+All provider keys live in Integration Hub. They are separate from platform login credentials. Give tokens only the scopes necessary for intended operations. Saving or connecting a connector automatically approves its `baseUrl` host; `INTEGRATION_HOSTS` is an optional bootstrap list only.
 
 ## Optional Windows authentication
 
