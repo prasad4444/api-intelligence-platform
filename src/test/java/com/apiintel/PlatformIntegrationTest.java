@@ -252,9 +252,20 @@ class PlatformIntegrationTest {
   @Test
   void authenticatedResourcesAndAudit() throws Exception {
     for (String kind : RecordStore.KINDS)
-      if (!Set.of("ai-drafts", "ai-checks").contains(kind)) mvc.perform(get("/api/records/" + kind)).andExpect(status().isOk());
+      if (!Set.of("ai-drafts", "ai-checks", "connections", "captured-requests", "discovery-sessions").contains(kind))
+        mvc.perform(get("/api/records/" + kind)).andExpect(status().isOk());
     mvc.perform(get("/api/records/ai-drafts")).andExpect(status().isBadRequest());
+    mvc.perform(get("/api/records/connections")).andExpect(status().isBadRequest());
     mvc.perform(get("/api/ai-drafts")).andExpect(status().isOk());
+    mvc.perform(get("/api/connections")).andExpect(status().isOk());
+    mvc.perform(get("/api/connections/definitions")).andExpect(status().isOk());
+    mvc.perform(get("/api/connections/providers")).andExpect(jsonPath("$.providers").isArray());
+    mvc.perform(get("/api/discovery/requests")).andExpect(status().isOk());
+    mvc.perform(get("/api/users")).andExpect(status().isOk());
+    mvc.perform(post("/api/users").with(csrf()).contentType("application/json")
+      .content("{\"username\":\"pat\",\"password\":\"password-12345\",\"displayName\":\"Pat\",\"roles\":[\"DEVELOPER\"]}"))
+      .andExpect(status().isOk())
+      .andExpect(jsonPath("$.username").value("pat"));
     mvc.perform(get("/api/me")).andExpect(jsonPath("$.name").value("admin"));
     mvc.perform(get("/api/csrf")).andExpect(jsonPath("$.token").exists());
     mvc.perform(get("/api/audit")).andExpect(status().isOk());

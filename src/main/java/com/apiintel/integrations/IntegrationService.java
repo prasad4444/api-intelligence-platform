@@ -104,7 +104,19 @@ public class IntegrationService {
   }
 
   public ObjectNode config(String id) {
-    return store.get("integrations", id);
+    try {
+      return store.get("connections", id);
+    } catch (org.springframework.web.server.ResponseStatusException missing) {
+      if (missing.getStatusCode() != org.springframework.http.HttpStatus.NOT_FOUND) throw missing;
+      return store.get("integrations", id);
+    }
+  }
+
+  public ObjectNode publicDefinition(ObjectNode c) {
+    var view = c.deepCopy();
+    view.remove(java.util.List.of("token", "password", "clientSecret", "credential"));
+    view.put("kind", "definition");
+    return view;
   }
 
   public void authorize(String id) {
@@ -115,13 +127,19 @@ public class IntegrationService {
     ) throw new org.springframework.security.access.AccessDeniedException(
       "Authentication required"
     );
+    var c = config(id);
+    if (c.path("ownerId").isTextual() && !c.path("ownerId").asText().isBlank()) {
+      if (a.getName().equals(c.path("owner").asText())) return;
+      throw new org.springframework.security.access.AccessDeniedException(
+        "This connection belongs to another user"
+      );
+    }
     if (
       a
         .getAuthorities()
         .stream()
         .anyMatch(r -> r.getAuthority().equals("ROLE_ADMIN"))
     ) return;
-    var c = config(id);
     for (var role : c.path("allowedRoles"))
       if (
         a
@@ -256,13 +274,13 @@ public class IntegrationService {
 
   private void auth(ObjectNode c, HttpHeaders h) {
     String type = c.path("authType").asText("NONE");
-    String secret = type.equals("NONE")
-      ? ""
-      : vault.get(c.path("secretRef").asText());
+    String secret = type.equals("NONE") ? "" : credential(c);
     if (
       !type.equals("NONE") && secret.isBlank()
     ) throw new IllegalArgumentException(
-      "Add the credential in the vault first"
+      c.path("ownerId").isTextual()
+        ? "Connect your own account before using this provider"
+        : "Add the credential in the vault first"
     );
     switch (type) {
       case "BEARER" -> h.setBearerAuth(secret.trim().replaceFirst("(?i)^Bearer +", ""));
@@ -493,11 +511,54 @@ public class IntegrationService {
     target(config, action.path("path").asText());
     var event = store.parse("{}");
     event.put("integrationId", id);
+    event.put("connectionId", id);
     event.put("connectionRevision", config.path("revision").asInt());
+    event.put("owner", actor);
+    if (config.path("ownerId").isTextual()) event.put("ownerId", config.path("ownerId").asText());
+    event.put("destination", URI.create(config.path("baseUrl").asText()).getHost());
+    event.put("payloadFingerprint", fingerprint(action));
     event.put("status", "PENDING");
     event.put("requester", actor);
     event.set("action", action);
     return store.save("events", event, actor);
+  }
+
+  private String fingerprint(JsonNode action) {
+    try {
+      var digest = java.security.MessageDigest.getInstance("SHA-256");
+      byte[] hash = digest.digest(action.toString().getBytes(StandardCharsets.UTF_8));
+      StringBuilder out = new StringBuilder();
+      for (byte value : hash) out.append(String.format("%02x", value));
+      return out.toString();
+    } catch (Exception e) {
+      throw new IllegalArgumentException("Cannot fingerprint approval payload");
+    }
+  }
+
+  private String credential(ObjectNode c) {
+    if (c.path("ownerId").isTextual() && !c.path("ownerId").asText().isBlank()) {
+      return vault.getScoped(c.path("ownerId").asText(), c.path("id").asText(), "credential");
+    }
+    return vault.get(c.path("secretRef").asText());
+  }
+
+  private void assertApprovalBinding(ObjectNode event, ObjectNode config) {
+    if (config.path("revision").asInt() != event.path("connectionRevision").asInt()) {
+      throw new IllegalArgumentException("Connection changed; request a new approval");
+    }
+    if (event.hasNonNull("payloadFingerprint")
+        && !event.path("payloadFingerprint").asText().equals(fingerprint(event.path("action")))) {
+      throw new IllegalArgumentException("Approved payload changed; request a new approval");
+    }
+    if (config.path("ownerId").isTextual()
+        && event.hasNonNull("ownerId")
+        && !config.path("ownerId").asText().equals(event.path("ownerId").asText())) {
+      throw new IllegalArgumentException("Connection owner changed; request a new approval");
+    }
+    String state = config.path("state").asText("");
+    if (!state.isBlank() && Set.of("NOT_CONNECTED", "RECONNECT_REQUIRED").contains(state)) {
+      throw new IllegalArgumentException("Reconnect required before executing this approval");
+    }
   }
 
   public synchronized ObjectNode approve(String id, String actor) {
@@ -527,11 +588,7 @@ public class IntegrationService {
     if (
       !e.path("status").asText().equals("APPROVED")
     ) throw new IllegalArgumentException("Explicit approval is required");
-    if (
-      c.path("revision").asInt() != e.path("connectionRevision").asInt()
-    ) throw new IllegalArgumentException(
-      "Connection changed; request a new approval"
-    );
+    assertApprovalBinding(e, c);
     e.put("status", "EXECUTING");
     final var claimed = store.save("events", e, actor);
     store.audit(actor, "friday:signal", id);
@@ -563,11 +620,7 @@ public class IntegrationService {
       !e.path("status").asText().equals("APPROVED")
     ) throw new IllegalArgumentException("Explicit approval is required");
     var c = config(e.path("integrationId").asText());
-    if (
-      c.path("revision").asInt() != e.path("connectionRevision").asInt()
-    ) throw new IllegalArgumentException(
-      "Connection changed; request a new approval"
-    );
+    assertApprovalBinding(e, c);
     e.put("status", "EXECUTING");
     e = store.save("events", e, actor);
     try {

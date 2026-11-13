@@ -45,6 +45,7 @@ export async function request(path: string, options: RequestInit = {}) {
 }
 export const post = (path: string, data: unknown = {}) =>
   request(path, { method: "POST", body: JSON.stringify(data) });
+export const del = (path: string) => request(path, { method: "DELETE" });
 export const save = (kind: string, data: Row) => post("/records/" + kind, data);
 export function resetCsrf() {
   csrf = "";

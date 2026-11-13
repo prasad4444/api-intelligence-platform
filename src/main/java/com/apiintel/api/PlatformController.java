@@ -1,5 +1,6 @@
 package com.apiintel.api;
 
+import com.apiintel.security.PlatformUserService;
 import com.apiintel.store.RecordStore;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.security.Principal;
@@ -16,11 +17,18 @@ public class PlatformController {
   private final RecordStore store;
   private final com.apiintel.workspace.SpecService specs;
   private final com.apiintel.workspace.WorkspaceArtifacts artifacts;
+  private final PlatformUserService users;
 
-  public PlatformController(RecordStore store, com.apiintel.workspace.SpecService specs, com.apiintel.workspace.WorkspaceArtifacts artifacts) {
+  public PlatformController(
+    RecordStore store,
+    com.apiintel.workspace.SpecService specs,
+    com.apiintel.workspace.WorkspaceArtifacts artifacts,
+    PlatformUserService users
+  ) {
     this.store = store;
     this.specs = specs;
     this.artifacts = artifacts;
+    this.users = users;
   }
 
   @GetMapping("/csrf")
@@ -30,7 +38,13 @@ public class PlatformController {
 
   @GetMapping("/me")
   public Map<String, Object> me(Authentication a) {
-    return Map.of("name", a.getName(), "roles", a.getAuthorities());
+    var profile = users.findByUsername(a.getName()).map(users::publicView).orElse(Map.of());
+    var out = new LinkedHashMap<String, Object>();
+    out.put("name", a.getName());
+    out.put("roles", a.getAuthorities());
+    out.put("id", profile.getOrDefault("id", ""));
+    out.put("displayName", profile.getOrDefault("displayName", a.getName()));
+    return out;
   }
 
   @GetMapping("/records/{kind}")
@@ -118,6 +132,8 @@ public class PlatformController {
     return store.audit();
   }
   private void checkPublicKind(String kind) {
-    if (Set.of("ai-drafts", "ai-checks").contains(kind)) throw new IllegalArgumentException("Use the AI review endpoints");
+    if (Set.of("ai-drafts", "ai-checks", "connections", "captured-requests", "discovery-sessions").contains(kind)) {
+      throw new IllegalArgumentException("Use the dedicated connection or discovery endpoints");
+    }
   }
 }

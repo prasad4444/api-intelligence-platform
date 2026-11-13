@@ -1,14 +1,10 @@
 package com.apiintel.config;
 
 import com.apiintel.diagnostics.ApiRequestLog;
-import java.util.*;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.*;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.core.userdetails.*;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.*;
 
@@ -19,38 +15,6 @@ public class SecurityConfig {
   @Bean
   org.springframework.security.crypto.password.PasswordEncoder passwordEncoder() {
     return new BCryptPasswordEncoder();
-  }
-
-  @Bean
-  UserDetailsService users(
-    @Value("${platform.admin-password}") String admin,
-    @Value("${platform.developer-password}") String dev,
-    @Value("${platform.reviewer-password}") String review
-  ) {
-    if (admin.isBlank()) throw new IllegalStateException(
-      "Set ADMIN_PASSWORD before starting the platform"
-    );
-    var encoder = new BCryptPasswordEncoder();
-    var users = new ArrayList<UserDetails>();
-    users.add(
-      User.withUsername("admin")
-        .password(encoder.encode(admin))
-        .roles("ADMIN", "REVIEWER", "DEVELOPER", "TESTER")
-        .build()
-    );
-    if (!dev.isBlank()) users.add(
-      User.withUsername("developer")
-        .password(encoder.encode(dev))
-        .roles("DEVELOPER", "TESTER")
-        .build()
-    );
-    if (!review.isBlank()) users.add(
-      User.withUsername("reviewer")
-        .password(encoder.encode(review))
-        .roles("REVIEWER")
-        .build()
-    );
-    return new InMemoryUserDetailsManager(users);
   }
 
   @Bean
