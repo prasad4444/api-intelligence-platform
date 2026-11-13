@@ -2388,6 +2388,10 @@ function ConnectorEditor({
             </Field>
             <p className="muted">Use vault references for custom headers, for example {pretty({"X-Internal-Key":"{{vault:stylus-key}}"})}.</p>
             {config.aiMethod !== "GET" && <Field label="AI request JSON template"><textarea className="code" value={aiTemplate} onChange={event => setAiTemplate(event.target.value)} /></Field>}
+            {config.aiMethod !== "GET" && <Field label="AI request body encoding"><select value={config.aiBodyFormat || "json"} onChange={event => set("aiBodyFormat", event.target.value)}>
+              <option value="json">JSON</option>
+              <option value="multipart">Multipart form (one part per template field)</option>
+            </select></Field>}
             {config.provider === "stylus" && <>
               <Field label="Stylus setup method"><select value={stylusSetup} onChange={event => setStylusSetup(event.target.value)}>
                 <option value="http">Direct HTTP</option><option value="curl">Redacted cURL / Bash template</option>

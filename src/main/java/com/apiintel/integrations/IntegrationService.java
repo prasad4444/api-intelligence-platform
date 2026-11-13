@@ -12,9 +12,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.*;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
+import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.*;
 import reactor.core.publisher.Flux;
 import reactor.netty.http.client.HttpClient;
@@ -71,7 +74,12 @@ public class IntegrationService {
       if (c.path("aiRequiresApproval").asBoolean()) throw new IllegalArgumentException("Use AI Tools to propose this task for approval");
       String method = AiEndpointSettings.method(c);
       var payload = method.equals("POST") ? AiChat.request(c, prompt) : null;
-      var response = call(c, method, c.path("chatPath").asText(), payload, actor, true);
+      JsonNode response;
+      if (payload != null && multipart(c)) {
+        response = callMultipart(c, c.path("chatPath").asText(), payload, actor, true);
+      } else {
+        response = call(c, method, c.path("chatPath").asText(), payload, actor, true);
+      }
       return store.parse("{}").set("response", AiChat.response(c, response));
     }
     var b = store.parse("{}");
@@ -302,7 +310,15 @@ public class IntegrationService {
     if (config.path("aiRequiresApproval").asBoolean() || !AiEndpointSettings.method(config).equals("POST")) {
       throw new IllegalArgumentException("This endpoint cannot generate a test draft synchronously");
     }
+    if (multipart(config)) {
+      return callMultipart(config, config.path("chatPath").asText(), payload, actor, true);
+    }
     return call(config, "POST", config.path("chatPath").asText(), payload, actor, true);
+  }
+
+  /** Posts a JSON object as multipart/form-data (one part per top-level field). */
+  public JsonNode callMultipart(ObjectNode c, String path, JsonNode payload, String actor) {
+    return callMultipart(c, path, payload, actor, false);
   }
 
   ObjectNode proposeAi(ObjectNode config, String prompt, String actor) {
@@ -331,7 +347,114 @@ public class IntegrationService {
     return chat(c, "Connectivity check. Reply with OK.", actor);
   }
 
+  private static boolean multipart(ObjectNode config) {
+    String format = config.path("aiBodyFormat").asText("").trim().toLowerCase(Locale.ROOT);
+    if (format.equals("multipart") || format.equals("multipart/form-data")) return true;
+    var headers = config.path("aiHeaders");
+    if (!headers.isObject()) return false;
+    var iterator = headers.fields();
+    while (iterator.hasNext()) {
+      var header = iterator.next();
+      if (header.getKey().equalsIgnoreCase(HttpHeaders.CONTENT_TYPE)
+          && header.getValue().asText("").toLowerCase(Locale.ROOT).contains("multipart/form-data")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private JsonNode callMultipart(ObjectNode c, String path, JsonNode payload, String actor, boolean ai) {
+    if (payload == null || !payload.isObject()) {
+      throw new IllegalArgumentException("Multipart AI requests need a JSON object template; each top-level field becomes a form part");
+    }
+    if (c.path("authType").asText().equals("WINDOWS")) {
+      throw new IllegalArgumentException("Multipart requests are not supported with Windows authentication; use JSON or an approved API token gateway");
+    }
+    URI uri = checkedTarget(c, path);
+    String id = ApiRequestLog.requestId();
+    long started = System.nanoTime();
+    store.audit(actor, "integration:POST", c.path("id").asText());
+    boolean dispatched = false;
+    try {
+      var credentials = new HttpHeaders();
+      auth(c, credentials);
+      if (ai) AiEndpointSettings.apply(c, credentials, vault);
+      credentials.remove(HttpHeaders.CONTENT_TYPE);
+      outbound.start("connector", "POST", uri, OutboundLog.scheme(credentials.getFirst(HttpHeaders.AUTHORIZATION)),
+          OutboundLog.hasCredentialHeader(credentials), !credentials.isEmpty(), false);
+      dispatched = true;
+      var body = new MultipartBodyBuilder();
+      payload.fields().forEachRemaining(field -> {
+        JsonNode value = field.getValue();
+        if (value.isTextual() || value.isNumber() || value.isBoolean()) {
+          body.part(field.getKey(), value.asText());
+        } else if (value.isBinary()) {
+          try {
+            body.part(field.getKey(), new ByteArrayResource(value.binaryValue()) {
+              @Override public String getFilename() { return field.getKey(); }
+            }).contentType(MediaType.APPLICATION_OCTET_STREAM);
+          } catch (java.io.IOException e) {
+            throw new IllegalArgumentException("Invalid binary multipart field: " + field.getKey());
+          }
+        } else {
+          body.part(field.getKey(), value.toString()).contentType(MediaType.APPLICATION_JSON);
+        }
+      });
+      var entity = client(c)
+        .post()
+        .uri(uri)
+        .headers(h -> {
+          h.addAll(credentials);
+          if (!h.containsKey(HttpHeaders.ACCEPT)) h.set(HttpHeaders.ACCEPT, c.path("aiResponseFormat").asText().equals("sse")
+            ? "application/json, text/event-stream" : "application/json");
+        })
+        .body(BodyInserters.fromMultipartData(body.build()))
+        .retrieve()
+        .onStatus(HttpStatusCode::is3xxRedirection, ClientResponse::createException)
+        .toEntity(String.class)
+        .block(Duration.ofSeconds(35));
+      int status = entity.getStatusCode().value();
+      outbound.result(id, "connector", "POST", uri, status, OutboundLog.challenge(entity.getHeaders()), started, OutboundLog.statusReason(status));
+      String raw = entity.getBody() == null ? "{}" : entity.getBody();
+      for (var header : credentials.entrySet()) for (String value : header.getValue()) {
+        var declared = c.path("aiHeaders").path(header.getKey());
+        if (ai && declared.isTextual() && !declared.asText().startsWith("{{vault:")) continue;
+        if (value.isBlank()) continue;
+        raw = redact(raw, value);
+        if (value.matches("(?i)^(Bearer|Basic) .+")) raw = redact(raw, value.substring(value.indexOf(' ') + 1));
+      }
+      try {
+        return new ObjectMapper().readTree(raw);
+      } catch (Exception e) {
+        return TextNode.valueOf(raw);
+      }
+    } catch (WebClientResponseException e) {
+      int status = e.getStatusCode().value();
+      outbound.result(id, dispatched ? "connector" : "connector-token", "POST", uri, status,
+          OutboundLog.challenge(e.getHeaders()), started, OutboundLog.statusReason(status));
+      String advice = switch (e.getStatusCode().value()) {
+        case 301, 302, 303, 307, 308 -> "use the final API URL and verify the credential";
+        case 401 -> "check the authorization scheme and replace expired credentials";
+        case 403 -> "check token scopes and the account's permissions";
+        case 404 -> "check the endpoint URL and API version";
+        case 429 -> "the provider rate limit was reached";
+        default -> "check the configured endpoint and multipart form fields";
+      };
+      throw new IllegalArgumentException("Provider returned HTTP " + e.getStatusCode().value() + ". " + advice);
+    } catch (IllegalArgumentException e) {
+      if (dispatched) outbound.result(id, "connector", "POST", uri, 0, "none", started, OutboundLog.failure(e));
+      else outbound.rejected("connector", "connector_credential", e);
+      throw e;
+    } catch (Exception e) {
+      outbound.result(id, dispatched ? "connector" : "connector-token", "POST", uri, 0, "none", started, OutboundLog.failure(e));
+      throw new IllegalArgumentException("Provider request failed (" + OutboundLog.failure(e) + ")");
+    }
+  }
+
   private JsonNode call(ObjectNode c, String method, String path, JsonNode payload, String actor, boolean ai) {
+    if (payload != null && multipart(c)) {
+      return callMultipart(c, path, payload, actor, ai);
+    }
     URI uri = checkedTarget(c, path);
     String verb = HttpMethod.valueOf(method).name();
     String id = ApiRequestLog.requestId();

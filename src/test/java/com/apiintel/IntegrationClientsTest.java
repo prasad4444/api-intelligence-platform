@@ -291,6 +291,35 @@ class IntegrationClientsTest {
   }
 
   @Test
+  void stylusMultipartChatPostsFormParts() {
+    config.put("provider", "stylus").put("authType", "AUTHORIZATION").put("aiChatEnabled", true)
+      .put("chatPath", "/stylus/chat").put("aiBodyFormat", "multipart").put("aiResponsePointer", "/answer");
+    config.putObject("aiHeaders").put("Content-Type", "multipart/form-data");
+    config.set("aiRequestTemplate", store.parse("{\"message\":\"{{prompt}}\",\"meta\":{\"source\":\"platform\"}}"));
+    vault.put("token", "Bearer stylus-multipart-token");
+    config = store.save("integrations", config, "test");
+    server.stubFor(post(urlEqualTo("/stylus/chat"))
+      .withHeader("Authorization", equalTo("Bearer stylus-multipart-token"))
+      .withHeader("Content-Type", containing("multipart/form-data"))
+      .withRequestBody(containing("name=\"message\""))
+      .withRequestBody(containing("Say hello"))
+      .withRequestBody(containing("name=\"meta\""))
+      .withRequestBody(containing("\"source\":\"platform\""))
+      .willReturn(okJson("{\"answer\":\"Stylus ok\"}")));
+    var controller = new IntegrationController(service, vault, store);
+    assertEquals(store.parse("{}").put("response", "Stylus ok"), controller.ai(
+      config.path("id").asText(), store.parse("{}").put("prompt", "Say hello"), () -> "test"));
+    server.stubFor(post(urlEqualTo("/stylus/direct"))
+      .withHeader("Content-Type", containing("multipart/form-data"))
+      .withRequestBody(containing("name=\"message\""))
+      .withRequestBody(containing("direct"))
+      .willReturn(okJson("{\"answer\":\"direct-ok\"}")));
+    assertEquals("direct-ok", service.callMultipart(
+      config, "/stylus/direct", store.parse("{\"message\":\"direct\",\"meta\":{\"source\":\"platform\"}}"), "test")
+      .path("answer").asText());
+  }
+
+  @Test
   void savedOperationUsesVaultAndRejectsStaleRevision() {
     var guard = mock(NetworkGuard.class);
     when(guard.validate(anyString())).thenAnswer(invocation -> java.net.URI.create(invocation.getArgument(0)));
