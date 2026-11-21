@@ -139,7 +139,113 @@ public final class ConnectorInference {
     if (!markerReplaced[0] && promptMarker != null && !promptMarker.isBlank()) {
       notes.add("Could not locate the prompt inside the request body template — verify {{prompt}} placement");
     }
+
+    // Pagination detected from the request query or the response shape.
+    result.set("pagination", detectPagination(parsed, preview));
+    // JSON-schema-ish description of the observed response.
+    result.set("responseSchema", schemaOf(preview));
+
+    // Per-field evidence: where each inferred value came from and how much
+    // confidence the UI should attach (LOW fields require user confirmation).
+    String capId = chatCapture.path("id").asText("");
+    var evidence = result.putObject("evidence");
+    evidence.set("chatPath", ev("HIGH", capId, parsed.path()));
+    evidence.set("aiMethod", ev("HIGH", capId, ""));
+    evidence.set("requestTemplate", ev(markerReplaced[0] ? "HIGH" : "LOW", capId,
+        markerReplaced[0] ? "prompt located in request body" : "prompt not found — placeholder guessed"));
+    String convSource = !conversationIds.isEmpty() ? "request body"
+        : steps.size() > 1 ? "preceding response" : "none detected";
+    evidence.set("conversationId", ev(
+        !conversationIds.isEmpty() ? "HIGH" : steps.size() > 1 ? "MEDIUM" : "LOW",
+        capId, convSource));
+    evidence.set("responseFormat", ev(sse ? "HIGH" : "MEDIUM", capId,
+        chatCapture.path("contentType").asText("")));
+    String pointer = result.path("aiResponsePointer").asText("");
+    evidence.set("responsePointer", ev(
+        RESPONSE_POINTERS.contains(pointer) ? "HIGH" : pointer.isBlank() ? "LOW" : "MEDIUM",
+        capId, pointer));
+    var pag = result.path("pagination");
+    evidence.set("pagination", ev(
+        "none".equals(pag.path("type").asText("none")) ? "LOW" : "MEDIUM",
+        capId, pag.path("pointer").asText("")));
+    evidence.set("responseSchema", ev(preview == null ? "LOW" : "MEDIUM", capId, ""));
     return result;
+  }
+
+  private static ObjectNode ev(String confidence, String captureId, String detail) {
+    var e = JSON.createObjectNode();
+    e.put("confidence", confidence);
+    if (!captureId.isBlank()) e.putArray("captureIds").add(captureId);
+    if (!detail.isBlank()) e.put("detail", detail);
+    return e;
+  }
+
+  /** Detect cursor / next-link / offset pagination from request + response shape. */
+  static ObjectNode detectPagination(ParsedUrl parsed, JsonNode preview) {
+    var out = JSON.createObjectNode();
+    out.put("type", "none");
+    for (String param : parsed.query().split("&")) {
+      String key = param.split("=", 2)[0].toLowerCase(Locale.ROOT);
+      if (Set.of("offset", "page", "pagenumber", "start").contains(key)) {
+        out.put("type", "offset").put("param", key).put("pointer", "query:" + key);
+        return out;
+      }
+      if (Set.of("cursor", "after", "nexttoken", "pagetoken", "continuation").contains(key)) {
+        out.put("type", "cursor").put("param", key).put("pointer", "query:" + key);
+        return out;
+      }
+    }
+    if (preview != null && preview.isObject()) {
+      String[] cursorFields = {"nextcursor", "next_cursor", "nextpagetoken", "cursor",
+          "nexttoken", "continuationtoken"};
+      String[] linkFields = {"next", "nextlink", "next_link"};
+      var found = findField(preview, "", cursorFields, linkFields);
+      if (found != null) {
+        boolean link = found.toLowerCase(Locale.ROOT).matches(".*(next|nextlink|next_link)$")
+            && !found.toLowerCase(Locale.ROOT).contains("cursor")
+            && !found.toLowerCase(Locale.ROOT).contains("token");
+        out.put("type", link ? "link" : "cursor").put("pointer", found);
+      }
+    }
+    return out;
+  }
+
+  private static String findField(JsonNode node, String prefix, String[] cursor, String[] link) {
+    var fields = node.fields();
+    while (fields.hasNext()) {
+      var f = fields.next();
+      String name = f.getKey().toLowerCase(Locale.ROOT);
+      String ptr = prefix + "/" + f.getKey();
+      for (String c : cursor) if (name.equals(c)) return ptr;
+      for (String l : link) if (name.equals(l)) return ptr;
+      if (f.getValue().isObject() && f.getKey().matches("(?i)(links|paging|pagination|meta)")) {
+        String inner = findField(f.getValue(), ptr, cursor, link);
+        if (inner != null) return inner;
+      }
+    }
+    return null;
+  }
+
+  /** JSON-schema-ish shape description built from a sample response. */
+  static ObjectNode schemaOf(JsonNode sample) {
+    var schema = JSON.createObjectNode();
+    if (sample == null) { schema.put("type", "unknown"); return schema; }
+    if (sample.isObject()) {
+      schema.put("type", "object");
+      var props = schema.putObject("properties");
+      sample.fields().forEachRemaining(f -> props.set(f.getKey(), schemaOf(f.getValue())));
+    } else if (sample.isArray()) {
+      schema.put("type", "array");
+      var merged = JSON.createObjectNode();
+      for (int i = 0; i < Math.min(3, sample.size()); i++) {
+        var item = schemaOf(sample.get(i));
+        merged.setAll(item);
+      }
+      schema.set("items", merged);
+    } else if (sample.isNumber()) schema.put("type", "number");
+    else if (sample.isBoolean()) schema.put("type", "boolean");
+    else schema.put("type", "string");
+    return schema;
   }
 
   static List<String> ssePayloads(String raw) {

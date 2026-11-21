@@ -130,8 +130,9 @@ public class ApprovedHosts {
       throw new IllegalArgumentException("Use an HTTP(S) URL without embedded credentials");
     }
     String host = uri.getHost().toLowerCase(Locale.ROOT);
-    String site = connection.path("siteHost").asText("").toLowerCase(Locale.ROOT);
-    String base = connection.path("baseUrl").asText("");
+    String site = connection == null ? ""
+        : connection.path("siteHost").asText("").toLowerCase(Locale.ROOT);
+    String base = connection == null ? "" : connection.path("baseUrl").asText("");
     if (!base.isBlank()) approve(base);
     if (!(host.equals(site) || allows(host))) {
       throw new IllegalArgumentException("Host must match the connection site or an approved connector host");

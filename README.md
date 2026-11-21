@@ -151,6 +151,19 @@ Generic Request Studio calls still block private destinations. Connector traffic
 
 See [integration recipes](docs/INTEGRATIONS.md) for GitHub, Devin, Jira, Friday and custom tools.
 
+## Observability and monitoring
+
+Connect **Splunk** under Connection Studio (token, Basic or session auth; Enterprise ≥9.0.1 / Cloud ≥9.0.2208 uses the v2 search endpoints, older uses v1), then use the **Monitoring** workspace to:
+
+- Build comparison **reports** (rolling/calendar windows, DST-aware baselines, lag, half-open windows; missing data is distinct from measured zero), preview resolved windows and metrics, save snapshots, and export CSV/PDF with an optional labeled AI summary.
+- Create durable **schedules** (interval/daily/weekly/cron, missed-run policy, retries/backoff/deadline) — in-process, SQLite-leased, dedup-safe across restarts; runs happen only while the app runs.
+- Define deduplicated **alert rules** evaluated per snapshot (absolute, rate change, baseline deviation, new error signatures, missing traffic, connector/report failure), backtest against history, and get one notification per episode.
+- Configure **notification destinations** (in-app, email, Slack/Teams, webhook) — created disabled; preview → recipient authorization → enable; transactional outbox with retries, backoff and webhook `Idempotency-Key`.
+- Run **investigations** that bundle bounded evidence (metrics, windows, redacted events, correlation IDs, related Jira/GitHub items, similar incidents) into AI chat with `[E#]` citations, then draft a **Jira incident** through the same propose → approve → execute reviewed-write pipeline.
+- **Knowledge search** covers reports, incidents, investigations and AI chat history, with stale-source flags and owner scoping.
+
+Prerequisites (management port 8089 reachable; Splunk Cloud REST access + IP allowlisting; role must allow search on approved indexes and REST access; token auth requires tokens enabled), notification setup (`SPRING_MAIL_*` env vars, `platform.notify.allowed-email-domains`), retention/cost controls and a fixture-vs-live verification table are in [Observability](docs/OBSERVABILITY.md).
+
 ## Security and operations
 
 - Local accounts use BCrypt; workspace RBAC is enforced on the backend. Accounts/passwords are deployment configuration, not a multi-tenant identity directory.
@@ -194,5 +207,6 @@ See the [verification report and page screenshots](docs/VERIFICATION.md).
 | Jira Cloud | OAuth 2.0 (3LO) or email + API token | JQL search (`/rest/api/3/search/jql`), issue details, context attach, approved create/update | Rotating refresh token in vault | Single-flight refresh, persist rotated token | Atlassian developer console OAuth app (for 3LO) |
 | Jira Data Center | PAT / existing auth | Search (`/rest/api/2/search`), issue, approved writes | Credential in vault | n/a | Network reachability, host approval |
 | GitHub | PAT | Repo browsing, file context, approved writes | PAT in vault | n/a | PAT scopes for target repos |
+| Splunk | Token / Basic / session login on mgmt port 8089 | Jobs, saved searches, mapping preview, monitoring reports/alerts | Session key cached in vault | Re-login once on 401 | Mgmt port reachable; Cloud: REST access + IP allowlist; role allows search on approved indexes |
 
 See [Connection Studio](docs/CONNECTION_STUDIO.md) for architecture and verification status.

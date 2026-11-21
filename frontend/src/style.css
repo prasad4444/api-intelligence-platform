@@ -1518,3 +1518,33 @@ tr:last-child td {
 .studio-timeline .timeline { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
 .studio-timeline .timeline li { display: grid; gap: 3px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .connector-review textarea { font-family: var(--mono, monospace); }
+
+/* --------------------------------------------------------- monitoring */
+.chart { margin: 10px 0; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-label { font-size: 10px; fill: var(--muted); }
+.chart-bar { fill: var(--accent); opacity: .7; }
+.chart-name { text-anchor: start; }
+.metric-table td { vertical-align: top; }
+.provenance { display: inline-block; margin-left: 6px; }
+.provenance summary { cursor: pointer; color: var(--muted); list-style: none; display: inline; }
+.chip { border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+  font-size: 12px; background: transparent; color: var(--text); cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--soft); border-color: var(--accent); color: var(--accent); }
+.unread-count { background: var(--red); color: #fff; border-radius: 999px;
+  font-size: 10px; padding: 1px 6px; margin-left: 4px; }
+.related-incidents { width: 280px; flex: 0 0 auto; }
+.related-incidents .panel { margin-top: 0; }
+.knowledge-modal { width: 720px; max-width: 94vw; max-height: 80vh; overflow: auto; }
+.codegen-view { display: grid; grid-template-columns: 260px 1fr; gap: 12px; margin: 10px 0; }
+.codegen-tree { display: flex; flex-direction: column; gap: 4px; }
+.codegen-tree button { text-align: left; font-family: monospace; font-size: 12px; }
+.codegen-tree button.active { background: var(--soft); color: var(--accent); border-color: var(--accent); }
+.codegen-file { max-height: 420px; overflow: auto; margin: 0; }
+tr.low-confidence td { background: color-mix(in srgb, var(--red) 7%, transparent); }
+.authorize-op { display: block; margin: 6px 0; font-size: 13px; }
+.cite { color: var(--accent); background: var(--soft); border-radius: 4px;
+  padding: 0 3px; font-family: monospace; font-size: .92em; border: none; cursor: pointer; }
+li.unread { border-left: 3px solid var(--accent); padding-left: 8px; }
+.capability-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }

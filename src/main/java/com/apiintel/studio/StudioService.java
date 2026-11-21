@@ -213,12 +213,80 @@ public class StudioService {
     return inferred;
   }
 
+  /** Sanitized HAR import — returns {captures, removed, kept}; no session needed. */
+  public ObjectNode importHar(byte[] raw, String username) {
+    return HarImport.sanitize(raw);
+  }
+
+  /** Run inference over supplied captures (HAR import or manual) with evidence. */
+  public ObjectNode inferCaptures(ObjectNode input, String username) {
+    java.util.List<ObjectNode> captures = new java.util.ArrayList<>();
+    input.path("captures").forEach(c -> captures.add((ObjectNode) c));
+    if (captures.size() > com.apiintel.integrations.DiscoveryService.MAX_CAPTURES) {
+      throw new IllegalArgumentException("Too many captures");
+    }
+    String marker = input.path("promptMarker").asText("");
+    var inferred = ConnectorInference.infer(captures, marker);
+    return inferred;
+  }
+
   public ObjectNode validate(String sessionId, ObjectNode input, String username) {
     var session = owned(sessionId, username);
     var connection = connections.getOwned(session.path("connectionId").asText(), username);
     var config = input.has("config") && input.path("config").isObject()
       ? input.path("config") : session.path("inferred");
     if (!config.isObject()) throw new IllegalArgumentException("Run inference or provide a connector config first");
+
+    // Every LOW-confidence inferred field must be explicitly confirmed.
+    var inferred = session.path("inferred");
+    if (inferred.isObject() && inferred.path("evidence").isObject()) {
+      var confirmed = new java.util.HashSet<String>();
+      input.path("confirmedFields").forEach(f -> confirmed.add(f.asText()));
+      var missing = new java.util.ArrayList<String>();
+      inferred.path("evidence").fields().forEachRemaining(f -> {
+        if ("LOW".equals(f.getValue().path("confidence").asText())
+            && !confirmed.contains(f.getKey())) missing.add(f.getKey());
+      });
+      if (!missing.isEmpty()) {
+        throw new IllegalArgumentException(
+            "Confirm low-confidence inferred fields first: " + String.join(", ", missing));
+      }
+    }
+
+    // Recorded non-GET operations need explicit authorization against the
+    // selected environment; validation itself stays read-only (GET).
+    var authorized = new java.util.HashSet<String>();
+    for (JsonNode op : input.path("authorizedOperations")) {
+      authorized.add(op.path("method").asText("").toUpperCase() + " " + op.path("path").asText());
+    }
+    for (JsonNode step : config.path("steps")) {
+      String method = step.path("method").asText("GET").toUpperCase();
+      if (!"GET".equals(method)
+          && !authorized.contains(method + " " + step.path("path").asText())) {
+        throw new IllegalArgumentException("Non-GET operation requires explicit authorization: "
+            + method + " " + step.path("path").asText());
+      }
+    }
+
+    // Optional variable-profile environment: the connection host must be one
+    // of the profile's allowed hosts.
+    String envId = input.path("environmentId").asText("");
+    if (!envId.isBlank()) {
+      var env = store.get("environments", envId);
+      String host = connection.path("siteHost").asText("");
+      boolean allowed = false;
+      for (JsonNode h : env.path("allowedHosts")) {
+        if (h.asText().equalsIgnoreCase(host)) allowed = true;
+      }
+      if (!allowed) {
+        throw new IllegalArgumentException(
+            "Connection host " + host + " is not allowed by environment " + env.path("name").asText());
+      }
+      connection.put("environmentId", envId);
+    }
+    if (input.has("authorizedOperations")) {
+      connection.set("authorizedOperations", input.get("authorizedOperations").deepCopy());
+    }
     for (String field : List.of("chatPath", "aiMethod", "aiResponseFormat", "aiResponsePointer", "replayMode")) {
       if (config.hasNonNull(field)) connection.set(field, config.get(field));
     }
@@ -230,15 +298,21 @@ public class StudioService {
     try {
       var runtime = connections.runtimeConfig(connection);
       integrations.testAi(runtime, username);
-      connection.put("state", "CONNECTED");
-      connection.put("connectorValidated", true);
-      connection = store.save("connections", connection, username);
+      // the probe execution bumps the record revision via the drift monitor —
+      // merge onto the current revision before saving
+      var fresh = connections.getOwned(connection.path("id").asText(), username);
+      fresh.put("state", "CONNECTED");
+      fresh.put("connectorValidated", true);
+      connection = store.save("connections", fresh, username);
       emit(session.path("ownerId").asText(), connection.path("id").asText(), sessionId,
         "CONNECTOR_VALIDATED", "Connector validated against the provider");
       update(sessionId, username, s -> s.put("status", "VALIDATED"));
     } catch (RuntimeException e) {
-      connection.put("connectorValidated", false);
-      store.save("connections", connection, username);
+      try {
+        var stale = connections.getOwned(connection.path("id").asText(), username);
+        stale.put("connectorValidated", false);
+        store.save("connections", stale, username);
+      } catch (RuntimeException ignored) {}
       emit(session.path("ownerId").asText(), connection.path("id").asText(), sessionId,
         "ERROR", e.getMessage() == null ? "Validation failed" : e.getMessage());
       throw new IllegalArgumentException("Connector validation failed: " + e.getMessage());
