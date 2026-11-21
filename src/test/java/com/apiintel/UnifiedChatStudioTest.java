@@ -552,8 +552,22 @@ class UnifiedChatStudioTest {
     assertEquals("/choices/0/message/content", inferred.path("aiResponsePointer").asText());
     assertTrue(inferred.path("steps").size() >= 2, () -> inferred.toString());
 
-    var validated = studio.validate(sessionId,
-      store.parse("{}").set("config", inferred), "alice");
+    var confirmedFields = new ObjectMapper().createArrayNode();
+    inferred.path("evidence").fields().forEachRemaining(f -> {
+      if ("LOW".equals(f.getValue().path("confidence").asText())) confirmedFields.add(f.getKey());
+    });
+    var authorized = new ObjectMapper().createArrayNode();
+    for (JsonNode step : inferred.path("steps")) {
+      String m = step.path("method").asText("GET");
+      if (!"GET".equalsIgnoreCase(m)) {
+        authorized.addObject().put("method", m).put("path", step.path("path").asText());
+      }
+    }
+    var validateBody = store.parse("{}");
+    validateBody.set("config", inferred);
+    validateBody.set("confirmedFields", confirmedFields);
+    validateBody.set("authorizedOperations", authorized);
+    var validated = studio.validate(sessionId, validateBody, "alice");
     assertEquals("CONNECTED", validated.path("state").asText());
     assertTrue(validated.path("connectorValidated").asBoolean());
     // Now it shows up as a chat provider.

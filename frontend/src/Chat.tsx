@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { Badge, Field, Panel } from "./components";
 import { listOperations } from "./endpoint-model";
+import { api as monitoringApi } from "./monitoring-api";
 
 type ContextForm = {
   scope: string;
@@ -57,6 +58,7 @@ export function ChatPanel({ spec }: { spec?: Row }) {
   const [busy, setBusy] = useState("");
   const [connections, setConnections] = useState<Row[]>([]);
   const [captures, setCaptures] = useState<Row[]>([]);
+  const [related, setRelated] = useState<Row[]>([]);
   const abort = useRef<AbortController | undefined>(undefined);
 
   const conversation = conversations.find(item => item.id === activeId);
@@ -115,6 +117,8 @@ export function ChatPanel({ spec }: { spec?: Row }) {
 
   async function doPreview(transferHistory?: boolean) {
     setBusy("preview"); setError(""); setStreamError(undefined);
+    monitoringApi.knowledgeSearch(prompt, "INCIDENT_RESOLUTION,INVESTIGATION")
+      .then(setRelated).catch(() => {});
     try {
       const target = activeId || await startConversation();
       if (!target) return;
@@ -372,6 +376,28 @@ export function ChatPanel({ spec }: { spec?: Row }) {
           </div>
         </div>
       </div>
+
+      {related.length > 0 && (
+        <aside className="related-incidents" aria-label="Related earlier incidents">
+          <Panel title="Related earlier incidents">
+            <ul className="action-list">
+              {related.slice(0, 8).map((item, i) => {
+                const it = item.item || item;
+                return (
+                  <li key={it.id || i}>
+                    <Badge tone={it.kind === "INCIDENT_RESOLUTION" ? "green" : "purple"}>
+                      {String(it.kind || "").replace(/_/g, " ")}
+                    </Badge>
+                    <b>{it.title}</b>
+                    {it.stale || item.stale ? <Badge tone="amber">stale</Badge> : null}
+                    {it.body && <small className="muted">{String(it.body).slice(0, 120)}</small>}
+                  </li>
+                );
+              })}
+            </ul>
+          </Panel>
+        </aside>
+      )}
 
       {transfer && (
         <div className="modal-backdrop" onClick={() => setTransfer(undefined)}>

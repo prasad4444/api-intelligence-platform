@@ -13,8 +13,8 @@ spring:
     password: ${DATABASE_PASSWORD:}
   servlet:
     multipart:
-      max-file-size: 5MB
-      max-request-size: 5MB
+      max-file-size: 10MB
+      max-request-size: 10MB
   jackson:
     deserialization:
       fail-on-unknown-properties: false
@@ -35,6 +35,19 @@ platform:
   integration-private-hosts: ${INTEGRATION_PRIVATE_HOSTS:}
   windows-auth-hosts: ${WINDOWS_AUTH_HOSTS:}
   windows-curl: ${WINDOWS_CURL:curl.exe}
+  scheduler:
+    enabled: ${SCHEDULER_ENABLED:true}
+  notify:
+    allowed-email-domains: ${NOTIFY_ALLOWED_EMAIL_DOMAINS:}
+  retention:
+    raw-events-days: ${RETENTION_RAW_EVENTS_DAYS:7}
+    snapshots-days: ${RETENTION_SNAPSHOTS_DAYS:90}
+  features:
+    service-dashboard: ${FEATURE_SERVICE_DASHBOARD:true}
+    playbooks: ${FEATURE_PLAYBOOKS:true}
+    correlation-search: ${FEATURE_CORRELATION_SEARCH:true}
+    template-catalog: ${FEATURE_TEMPLATE_CATALOG:true}
+    cost-controls: ${FEATURE_COST_CONTROLS:true}
 logging:
   level:
     com.apiintel.diagnostics: ${APIINTEL_LOG_LEVEL:INFO}

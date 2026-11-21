@@ -22,6 +22,9 @@ import {
   Command,
   RefreshCw,
   MonitorSmartphone,
+  Gauge,
+  Bell,
+  BookOpen,
 } from "lucide-react";
 import { request, post, save, resetCsrf, pretty, type Row } from "./api";
 import { listOperations } from "./endpoint-model";
@@ -40,6 +43,7 @@ import {
   Admin,
 } from "./pages";
 import { ConnectionStudio } from "./ConnectionStudio";
+import { KnowledgeTab, Monitoring } from "./Monitoring";
 const nav = [
   ["Dashboard", LayoutDashboard],
   ["API Workspace", Braces],
@@ -54,6 +58,7 @@ const nav = [
   ["Dev Utilities", Wrench],
   ["Integration Hub", PlugZap],
   ["Connection Studio", MonitorSmartphone],
+  ["Monitoring", Gauge],
   ["Admin", Settings],
 ] as const;
 const descriptions: Record<string, string> = {
@@ -72,6 +77,8 @@ const descriptions: Record<string, string> = {
     "One control plane for your tools, credentials and agents.",
   "Connection Studio":
     "Pair your own apps, record flows and activate chat connectors.",
+  Monitoring:
+    "Compare over time, schedule reports, alert on what matters, investigate with AI.",
   Admin: "Access policies, encrypted secrets and traceable changes.",
 };
 const pageKinds: Record<string, string[]> = {
@@ -85,7 +92,8 @@ const pageKinds: Record<string, string[]> = {
   Architecture: ["diagrams"],
   "AI Copilot": ["integrations", "ai-drafts", "runs", "connections"],
   "Integration Hub": ["integrations", "events", "connections"],
-  "Connection Studio": ["connections"],
+  "Connection Studio": ["connections", "environments", "specs"],
+  Monitoring: ["connections"],
   GitHub: ["integrations", "connections"],
   Admin: [],
 };
@@ -112,6 +120,8 @@ export default function App() {
     [busy, setBusy] = useState(false),
     [editor, setEditor] = useState<{ kind: string; row: Row } | null>(null),
     [palette, setPalette] = useState(false),
+    [knowledgeOpen, setKnowledgeOpen] = useState(false),
+    [unread, setUnread] = useState(0),
     [query, setQuery] = useState("");
   useEffect(() => { setNotice(""); }, [page]);
   useEffect(() => {
@@ -171,6 +181,15 @@ export default function App() {
   useEffect(() => {
     if (user) reload().catch(e => setNotice(String(e)));
   }, [user, reload]);
+  useEffect(() => {
+    if (!user) return;
+    const poll = () => request("/notifications")
+      .then((rows: Row[]) => setUnread(rows.filter(r => !r.readAt && !r.read_at).length))
+      .catch(() => {});
+    poll();
+    const timer = setInterval(poll, 30000);
+    return () => clearInterval(timer);
+  }, [user, page]);
   async function run(fn: () => Promise<unknown>, kinds?: string[]) {
     setBusy(true);
     setNotice("");
@@ -279,6 +298,14 @@ export default function App() {
             <button className="search-button" onClick={() => setPalette(true)}>
               <Search size={16} /> Jump to… <kbd>⌘ K</kbd>
             </button>
+            <button className="search-button" aria-label="Search knowledge"
+              onClick={() => setKnowledgeOpen(true)}>
+              <BookOpen size={16} /> Knowledge
+            </button>
+            <button className="search-button" aria-label="Notifications"
+              onClick={() => setPage("Monitoring")}>
+              <Bell size={16} /> {unread > 0 && <span className="unread-count">{unread}</span>}
+            </button>
             <select className="theme-select" aria-label="Theme" value={theme} onChange={event => setTheme(event.target.value)}>
               <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
             </select>
@@ -347,6 +374,8 @@ export default function App() {
             <GitHubPage {...props} />
           ) : page === "Connection Studio" ? (
             <ConnectionStudio {...props} />
+          ) : page === "Monitoring" ? (
+            <Monitoring {...props} />
           ) : (
             <Admin {...props} />
           )}
@@ -368,6 +397,14 @@ export default function App() {
             await reload();
           }}
         />
+      )}
+      {knowledgeOpen && (
+        <div className="modal-backdrop" onClick={() => setKnowledgeOpen(false)}>
+          <div className="command-palette knowledge-modal" role="dialog" aria-label="Knowledge search"
+            onClick={e => e.stopPropagation()}>
+            <KnowledgeTab onOpenConversation={() => { setKnowledgeOpen(false); setPage("AI Copilot"); }} />
+          </div>
+        </div>
       )}
       {palette && (
         <div className="modal-backdrop" onClick={() => setPalette(false)}>

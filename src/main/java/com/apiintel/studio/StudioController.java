@@ -69,6 +69,19 @@ public class StudioController {
     return studio.validate(id, body == null ? studioEmpty() : body, principal.getName());
   }
 
+  /** Sanitized HAR import: keeps xhr/fetch entries, strips secrets, reports removals. */
+  @PostMapping(path = "/har", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public ObjectNode importHar(@RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+      Principal principal) throws java.io.IOException {
+    return studio.importHar(file.getBytes(), principal.getName());
+  }
+
+  /** Inference over imported/pasted captures (no browser session). */
+  @PostMapping("/har/infer")
+  public ObjectNode inferCaptures(@RequestBody ObjectNode body, Principal principal) {
+    return studio.inferCaptures(body, principal.getName());
+  }
+
   @PostMapping("/sessions/{id}/cancel")
   public ObjectNode cancel(@PathVariable String id, Principal principal) {
     return studio.cancel(id, principal.getName());

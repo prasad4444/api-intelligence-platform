@@ -49,6 +49,8 @@ public class ChatService {
   private final ChatContextService contexts;
   private final ConfirmationGrants grants;
   private final com.apiintel.oauth.TokenRefresher refresher;
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private com.apiintel.knowledge.KnowledgeService knowledge;
   private final Map<String, Disposable> inflight = new ConcurrentHashMap<>();
   private final Map<String, String> inflightMessage = new ConcurrentHashMap<>();
 
@@ -160,6 +162,9 @@ public class ChatService {
     cancel(id, username);
     db.update("DELETE FROM chat_messages WHERE conversation_id=?", id);
     db.update("DELETE FROM chat_conversations WHERE id=?", id);
+    if (knowledge != null) {
+      try { knowledge.invalidate("CHAT_CONVERSATION", id); } catch (RuntimeException ignored) {}
+    }
   }
 
   public List<Map<String, Object>> messages(String conversationId, String username) {
@@ -442,6 +447,18 @@ public class ChatService {
     if (extraMeta != null) meta.setAll(extraMeta);
     db.update("UPDATE chat_messages SET content=?, status=?, meta=? WHERE id=?",
       content, status, meta.toString(), id);
+    if (knowledge != null && "complete".equals(status) && !content.isBlank()) {
+      try {
+        var rows2 = db.queryForList("SELECT owner_id,conversation_id,role FROM chat_messages WHERE id=?", id);
+        if (!rows2.isEmpty()) {
+          var row = rows2.get(0);
+          String owner = str(row.get("owner_id") == null ? row.get("OWNER_ID") : row.get("owner_id"));
+          String convId = str(row.get("conversation_id") == null ? row.get("CONVERSATION_ID") : row.get("conversation_id"));
+          String role = str(row.get("role") == null ? row.get("ROLE") : row.get("role"));
+          knowledge.indexChatMessage(owner, convId, id, role, content);
+        }
+      } catch (RuntimeException ignored) {}
+    }
   }
 
   private String conversationState(Map<String, Object> conversation) {

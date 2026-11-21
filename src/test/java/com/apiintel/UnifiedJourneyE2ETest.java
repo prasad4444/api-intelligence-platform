@@ -264,8 +264,23 @@ class UnifiedJourneyE2ETest {
       var inferred = alice.call("POST", "/api/studio/sessions/" + studioSessionId + "/infer",
         "{\"promptMarker\":\"probe-marker-1\"}");
       assertEquals("/chat", inferred.path("chatPath").asText());
+      var confirmedFields = JSON.createArrayNode();
+      inferred.path("evidence").fields().forEachRemaining(f -> {
+        if ("LOW".equals(f.getValue().path("confidence").asText())) confirmedFields.add(f.getKey());
+      });
+      var authorized = JSON.createArrayNode();
+      for (JsonNode step : inferred.path("steps")) {
+        String m = step.path("method").asText("GET");
+        if (!"GET".equalsIgnoreCase(m)) {
+          authorized.addObject().put("method", m).put("path", step.path("path").asText());
+        }
+      }
+      var validateBody = JSON.createObjectNode();
+      validateBody.set("config", inferred);
+      validateBody.set("confirmedFields", confirmedFields);
+      validateBody.set("authorizedOperations", authorized);
       var validated = alice.call("POST", "/api/studio/sessions/" + studioSessionId + "/validate",
-        "{\"config\":" + inferred + "}");
+        validateBody.toString());
       assertEquals("CONNECTED", validated.path("state").asText());
 
       // Provider list is owner-scoped.

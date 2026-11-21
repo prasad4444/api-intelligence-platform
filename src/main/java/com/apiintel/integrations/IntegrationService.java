@@ -31,6 +31,9 @@ public class IntegrationService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private org.springframework.context.ApplicationEventPublisher publisher;
 
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private com.apiintel.connectors.DriftMonitor driftMonitor;
+
   public record PullRequestCreated(ObjectNode payload, String actor) {}
 
   @org.springframework.beans.factory.annotation.Autowired(required=false)
@@ -500,13 +503,21 @@ public class IntegrationService {
         raw = redact(raw, value);
         if (value.matches("(?i)^(Bearer|Basic) .+")) raw = redact(raw, value.substring(value.indexOf(' ') + 1));
       }
+      JsonNode parsed;
       try {
-        return new ObjectMapper().readTree(raw);
+        parsed = new ObjectMapper().readTree(raw);
       } catch (Exception e) {
-        return TextNode.valueOf(raw);
+        parsed = TextNode.valueOf(raw);
       }
+      if (driftMonitor != null) {
+        try { driftMonitor.onSuccess(c, parsed); } catch (RuntimeException ignored) {}
+      }
+      return parsed;
     } catch (WebClientResponseException e) {
       int status = e.getStatusCode().value();
+      if (driftMonitor != null) {
+        try { driftMonitor.onFailure(c); } catch (RuntimeException ignored) {}
+      }
       outbound.result(id, dispatched ? "connector" : "connector-token", verb, uri, status,
           OutboundLog.challenge(e.getHeaders()), started, OutboundLog.statusReason(status));
       String advice = switch (e.getStatusCode().value()) {

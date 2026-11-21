@@ -17,7 +17,7 @@ public class ConnectionService {
 
   public static final Set<String> PROVIDERS = Set.of(
     "jira", "github", "github-copilot", "copilot", "devin", "stylus", "friday",
-    "openai", "anthropic", "azure", "ollama", "custom"
+    "openai", "anthropic", "azure", "ollama", "custom", "splunk"
   );
   public static final Set<String> STATES = Set.of(
     "NOT_CONNECTED", "CONNECTED", "RECONNECT_REQUIRED", "ERROR"
@@ -92,9 +92,19 @@ public class ConnectionService {
       "tenant", "cloudId", "replayMode", "modelsBaseUrl", "authorizeUrl", "tokenUrl", "resourcesUrl", "apiBase",
       "copilotStream", "pollIntervalMs", "maxPolls", "oauthApp",
       "chatPath", "aiChatEnabled", "aiMethod", "aiProbePath", "aiResponseFormat", "aiResponsePointer",
-      "aiRequiresApproval", "testGenerationEnabled", "aiRequestTemplate");
+      "aiRequiresApproval", "testGenerationEnabled", "aiRequestTemplate",
+      "deployment", "splunkApp", "splunkOwner", "defaultTimezone", "webUrl", "apiVersion",
+      "correlationPath", "environmentId");
     if (input.has("steps") && input.path("steps").isArray()) {
       connection.set("steps", input.path("steps").deepCopy());
+    }
+    if (input.has("approvedIndexes") && input.path("approvedIndexes").isArray()) {
+      connection.set("approvedIndexes", input.path("approvedIndexes").deepCopy());
+    }
+    for (String objectField : List.of("fieldMappings", "limits")) {
+      if (input.has(objectField) && input.path(objectField).isObject()) {
+        connection.set(objectField, input.path(objectField).deepCopy());
+      }
     }
     if (input.has("captureIds") && input.path("captureIds").isArray()) {
       connection.set("captureIds", input.path("captureIds").deepCopy());
@@ -186,6 +196,16 @@ public class ConnectionService {
       connection.put("state", reconnect ? "RECONNECT_REQUIRED" : "ERROR");
       connection.put("lastError", message);
       connection.put("verifiedIdentity", "");
+    }
+    // The verification call may update the record itself (drift counters),
+    // so merge the state fields onto the current revision before saving.
+    try {
+      var current = store.get("connections", id);
+      for (String f : List.of("state", "verifiedIdentity", "lastError", "enabled")) {
+        if (connection.has(f)) current.set(f, connection.get(f));
+      }
+      connection = current;
+    } catch (RuntimeException ignored) {
     }
     return redact(store.save("connections", connection, username));
   }

@@ -38,7 +38,16 @@ public class RecordStore {
     "events",
     "ai-drafts",
     "ai-checks",
-    "governance-runs"
+    "governance-runs",
+    "splunk-templates",
+    "splunk-jobs",
+    "report-definitions",
+    "alert-rules",
+    "notify-destinations",
+    "investigations",
+    "connector-versions",
+    "playbooks",
+    "cost-limits"
   );
 
   public RecordStore(JdbcTemplate db, ObjectMapper json) {

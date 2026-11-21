@@ -8,6 +8,7 @@ import {
   type ActivityEvent, type OAuthStart, type Row, type StudioSession,
 } from "./api";
 import { Badge, Field, Panel } from "./components";
+import { CodegenPanel, ImportPanel, InferenceReview, SplunkPanel, VersionsPanel } from "./ConnectorBuilder";
 import type { PageProps } from "./App";
 
 const PROVIDERS = [
@@ -17,6 +18,7 @@ const PROVIDERS = [
   ["copilot", "Microsoft 365 Copilot"],
   ["devin", "Devin"],
   ["stylus", "Stylus"],
+  ["splunk", "Splunk"],
   ["custom", "Custom web app"],
 ] as const;
 
@@ -40,6 +42,11 @@ const METHODS: Record<string, { id: string; label: string }[]> = {
   stylus: [
     { id: "bearer", label: "Endpoint configuration + credential" },
     { id: "browser", label: "Browser pairing" },
+  ],
+  splunk: [
+    { id: "splunk-token", label: "Authentication token (Bearer)" },
+    { id: "splunk-basic", label: "Username + password (Basic)" },
+    { id: "splunk-session", label: "Session login (auth/login)" },
   ],
   custom: [
     { id: "bearer", label: "Endpoint configuration + credential" },
@@ -67,7 +74,7 @@ function methodOf(connection: Row): string {
   return "bearer";
 }
 
-export function ConnectionStudio({ data, reload }: PageProps) {
+export function ConnectionStudio({ data, reload, spec }: PageProps) {
   const connections = data.connections || [];
   const [tab, setTab] = useState("");
   const active = connections.find(item => item.id === tab) || connections[0];
@@ -97,7 +104,9 @@ export function ConnectionStudio({ data, reload }: PageProps) {
       {(!active || tab === "add") ? (
         <AddApp onCreated={id => { setTab(id); refresh(); }} />
       ) : (
-        <StudioTab key={active.id + ":" + active.revision} connection={active} onChange={refresh} />
+        <StudioTab key={active.id + ":" + active.revision} connection={active} onChange={refresh}
+          spec={spec} environments={data.environments || []}
+          githubConnections={connections.filter((c: Row) => c.provider === "github")} />
       )}
     </section>
   );
@@ -135,6 +144,12 @@ function AddApp({ onCreated }: { onCreated: (id: string) => void }) {
         return { ...body, authType: "NONE", clientId, tenant };
       case "api-key":
         return { ...body, authType: "BEARER", credential };
+      case "splunk-token":
+        return { ...body, authType: "SPLUNK_TOKEN", credential, deployment: "ENTERPRISE" };
+      case "splunk-basic":
+        return { ...body, authType: "BASIC", credential, deployment: "ENTERPRISE" };
+      case "splunk-session":
+        return { ...body, authType: "SESSION", credential, deployment: "ENTERPRISE" };
       case "browser":
         return { ...body, authType: "NONE" };
       default:
@@ -211,11 +226,16 @@ function AddApp({ onCreated }: { onCreated: (id: string) => void }) {
   );
 }
 
-function StudioTab({ connection, onChange }: { connection: Row; onChange: () => void }) {
+function StudioTab({ connection, onChange, spec, environments, githubConnections }: {
+  connection: Row; onChange: () => void; spec?: Row; environments: Row[];
+  githubConnections: Row[];
+}) {
   const [session, setSession] = useState<StudioSession>();
   const [marker, setMarker] = useState("");
   const [inferred, setInferred] = useState<Row>();
   const [config, setConfig] = useState<Row>();
+  const [extras, setExtras] = useState<{ confirmedFields: string[]; authorizedOperations: Row[]; environmentId: string }>
+    ({ confirmedFields: [], authorizedOperations: [], environmentId: "" });
   const [timeline, setTimeline] = useState<ActivityEvent[]>([]);
   const [sites, setSites] = useState<Row[]>(connection.jiraSites || []);
   const [cloudId, setCloudId] = useState(connection.cloudId || "");
@@ -225,6 +245,7 @@ function StudioTab({ connection, onChange }: { connection: Row; onChange: () => 
   const [expanded, setExpanded] = useState<number | undefined>(undefined);
   const poll = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const method = methodOf(connection);
+  const isConnector = ["custom", "stylus"].includes(connection.provider);
 
   const refreshTimeline = useCallback(() => {
     request("/studio/timeline?connectionId=" + connection.id).then(setTimeline).catch(() => {});
@@ -273,6 +294,10 @@ function StudioTab({ connection, onChange }: { connection: Row; onChange: () => 
             <span><b>Account</b> {connection.verifiedIdentity || "—"}</span>
             <span><b>Host</b> <code>{connection.siteHost || connection.baseUrl}</code></span>
             <span><b>Method</b> {(METHODS[connection.provider] || []).find(item => item.id === method)?.label || method}</span>
+            {connection.provider === "splunk" && connection.apiVersion &&
+              <span><b>Search API</b> {connection.apiVersion} (v{connection.version || "?"})</span>}
+            {connection.driftDetected && <Badge tone="red">Schema drift — DEGRADED</Badge>}
+            {connection.health && connection.health !== "OK" && <Badge tone="amber">{connection.health}</Badge>}
           </div>
           <div className="toolbar">
             <button disabled={!!busy} onClick={() => act("test", async () => {
@@ -305,6 +330,15 @@ function StudioTab({ connection, onChange }: { connection: Row; onChange: () => 
           {notice && <p className="muted">{notice}</p>}
           {connection.lastError && <p className="error">{connection.lastError}</p>}
         </Panel>
+
+        {connection.provider === "splunk" && (
+          <SplunkPanel connection={connection} onSaved={onChange} act={act} busy={busy} />
+        )}
+
+        {isConnector && (
+          <ImportPanel spec={spec} act={act} busy={busy}
+            onInferred={result => { setInferred(result); setConfig(result); }} />
+        )}
 
         <Panel title="Browser pairing" action={<Badge tone="purple">CONTROLLED CHROMIUM</Badge>}>
           <div className="info-box"><Info size={15} />
@@ -390,14 +424,41 @@ function StudioTab({ connection, onChange }: { connection: Row; onChange: () => 
               </ul>
             )}
 
+            {inferred?.evidence && (
+              <InferenceReview inferred={inferred} config={config || inferred}
+                environments={environments}
+                onChange={(_, next) => setExtras(next)} />
+            )}
             {config && <ConnectorReview config={config} onChange={setConfig}
               onValidate={() => act("validate", async () => {
-                await post("/studio/sessions/" + session.id + "/validate", { config });
+                await post("/studio/sessions/" + session.id + "/validate", {
+                  config,
+                  confirmedFields: extras.confirmedFields,
+                  authorizedOperations: extras.authorizedOperations,
+                  environmentId: extras.environmentId,
+                });
                 setSession(await request("/studio/sessions/" + session.id));
                 setNotice("Connector validated — it is now available in AI chat providers.");
               })} busy={busy} />}
           </>}
+          {!session && config && <>
+            {inferred?.evidence && (
+              <InferenceReview inferred={inferred} config={config}
+                environments={environments}
+                onChange={(_, next) => setExtras(next)} />
+            )}
+            <ConnectorReview config={config} onChange={setConfig}
+              onValidate={() => act("validate", async () => {
+                setError("Validation executes against the provider inside a pairing session — open the controlled browser first.");
+              })} busy={busy} />
+          </>}
         </Panel>
+
+        {isConnector && <>
+          <VersionsPanel connection={connection} />
+          <CodegenPanel connection={connection} githubConnections={githubConnections}
+            act={act} busy={busy} />
+        </>}
       </div>
       <aside className="studio-timeline">
         <Panel title="Activity">
