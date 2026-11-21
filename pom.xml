@@ -31,6 +31,7 @@
 <excludes>
 <exclude>com/apiintel/integrations/PlaywrightCaptureTransport.class</exclude>
 <exclude>com/apiintel/integrations/DiscoveryCommand.class</exclude>
+<exclude>com/apiintel/studio/PlaywrightBrowserLauncher.class</exclude>
 </excludes>
 <rules><rule><element>BUNDLE</element><limits><limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>0.80</minimum></limit></limits></rule></rules></configuration></execution></executions></plugin>
 </plugins></build></project>

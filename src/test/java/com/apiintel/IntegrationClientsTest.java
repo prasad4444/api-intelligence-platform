@@ -447,7 +447,13 @@ class IntegrationClientsTest {
       store,
       service,
       org.mockito.Mockito.mock(com.apiintel.integrations.ConnectionService.class),
-      org.mockito.Mockito.mock(com.apiintel.integrations.ReplayService.class)
+      org.mockito.Mockito.mock(com.apiintel.integrations.ReplayService.class),
+      new com.apiintel.chat.ChatContextService(store,
+        org.mockito.Mockito.mock(com.apiintel.integrations.ReplayService.class),
+        org.mockito.Mockito.mock(com.apiintel.jira.JiraService.class),
+        org.mockito.Mockito.mock(com.apiintel.integrations.ConnectionService.class),
+        service),
+      new com.apiintel.chat.ConfirmationGrants()
     );
     var input = store.parse("{}").put("connectionRevision", config.path("revision").asInt())
       .put("scope", "operation").put("operation", "GET /orders")

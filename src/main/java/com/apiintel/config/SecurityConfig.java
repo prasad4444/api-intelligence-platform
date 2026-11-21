@@ -27,6 +27,7 @@ public class SecurityConfig {
             "/index.html",
             "/assets/**",
             "/api/csrf",
+            "/api/oauth/callback",
             "/error"
           )
           .permitAll()

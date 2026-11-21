@@ -24,6 +24,22 @@ public class ReplayService {
   private final ObjectMapper json = new ObjectMapper();
   private final ConcurrentHashMap<String, Object> refreshLocks = new ConcurrentHashMap<>();
   private final ThreadLocal<Boolean> browserStarted = ThreadLocal.withInitial(() -> false);
+  private final com.apiintel.oauth.TokenRefresher refresher;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public ReplayService(
+    RecordStore store,
+    Vault vault,
+    ConnectionService connections,
+    ApprovedHosts approved,
+    com.apiintel.oauth.TokenRefresher refresher
+  ) {
+    this.store = store;
+    this.vault = vault;
+    this.connections = connections;
+    this.approved = approved;
+    this.refresher = refresher;
+  }
 
   public ReplayService(
     RecordStore store,
@@ -31,10 +47,7 @@ public class ReplayService {
     ConnectionService connections,
     ApprovedHosts approved
   ) {
-    this.store = store;
-    this.vault = vault;
-    this.connections = connections;
-    this.approved = approved;
+    this(store, vault, connections, approved, new com.apiintel.oauth.TokenRefresher(store, vault, approved));
   }
 
   public boolean browserStartedDuringReplay() {
@@ -261,43 +274,12 @@ public class ReplayService {
   }
 
   private void refreshSession(ObjectNode connection, String username) {
-    String refresh = vault.getScoped(connection.path("ownerId").asText(), connection.path("id").asText(), "refresh_token");
-    if (!refresh.isBlank() && connection.path("tokenPath").asText().length() > 0) {
-      // OAuth refresh is best-effort using stored refresh token against the approved host.
-      try {
-        URI tokenUri = URI.create(connection.path("baseUrl").asText().replaceAll("/$", "") + connection.path("tokenPath").asText());
-        enforceDestination(tokenUri, connection);
-        String form = "grant_type=refresh_token&refresh_token=" +
-          java.net.URLEncoder.encode(refresh, StandardCharsets.UTF_8);
-        HttpRequest request = HttpRequest.newBuilder(tokenUri)
-          .timeout(Duration.ofSeconds(20))
-          .header("Content-Type", "application/x-www-form-urlencoded")
-          .POST(HttpRequest.BodyPublishers.ofString(form))
-          .build();
-        HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() >= 400) throw new SessionExpiredException("Reconnect required");
-        JsonNode body = json.readTree(response.body());
-        if (!body.hasNonNull("access_token")) throw new SessionExpiredException("Reconnect required");
-        vault.putScoped(connection.path("ownerId").asText(), connection.path("id").asText(), "credential",
-          "Bearer " + body.path("access_token").asText());
-        if (body.hasNonNull("refresh_token")) {
-          vault.putScoped(connection.path("ownerId").asText(), connection.path("id").asText(), "refresh_token",
-            body.path("refresh_token").asText());
-        }
-        connection.put("state", "CONNECTED");
-        store.save("connections", connection, username);
-        return;
-      } catch (SessionExpiredException e) {
-        throw e;
-      } catch (Exception e) {
-        throw new SessionExpiredException("Reconnect required");
-      }
+    // Unified with OAuthService: a single coordinated refresh per connection.
+    try {
+      refresher.refresh(connection, username);
+    } catch (RuntimeException e) {
+      throw new SessionExpiredException("Reconnect required");
     }
-    String session = vault.getScoped(connection.path("ownerId").asText(), connection.path("id").asText(), "session");
-    if (session.isBlank()) throw new SessionExpiredException("Reconnect required");
-    // Saved browser session present: retry once without launching Chromium.
-    connection.put("state", "CONNECTED");
-    store.save("connections", connection, username);
   }
 
   private void enforceDestination(URI uri, ObjectNode connection) {

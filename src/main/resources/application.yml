@@ -28,6 +28,8 @@ platform:
   vault-key: ${VAULT_KEY:}
   seed: ${SEED_DEMO:true}
   friday-url: ${FRIDAY_URL:http://localhost:18080}
+  public-url: ${PUBLIC_URL:http://localhost:8080}
+  browser-profiles: ${BROWSER_PROFILES:./data/browser-profiles}
   # Optional bootstrap only. Saving a connector or personal connection auto-approves its host.
   integration-hosts: ${INTEGRATION_HOSTS:}
   integration-private-hosts: ${INTEGRATION_PRIVATE_HOSTS:}
