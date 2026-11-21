@@ -41,6 +41,7 @@ public class IntegrationService {
   private final ApprovedHosts approved;
   private final String friday;
 
+  @org.springframework.beans.factory.annotation.Autowired
   public IntegrationService(
     RecordStore s,
     Vault v,
@@ -66,7 +67,7 @@ public class IntegrationService {
     return chat(config(id), prompt, actor);
   }
 
-  JsonNode chat(ObjectNode c, String prompt, String actor) {
+  public JsonNode chat(ObjectNode c, String prompt, String actor) {
     String provider = c.path("provider").asText();
     if (prompt.length() > 180000) throw new IllegalArgumentException("Contract context is too large. Select a smaller scope");
     if (prompt.isBlank()) throw new IllegalArgumentException("Enter a prompt");
@@ -337,7 +338,7 @@ public class IntegrationService {
     return propose(config, id, action, actor);
   }
 
-  JsonNode testAi(ObjectNode c, String actor) {
+  public JsonNode testAi(ObjectNode c, String actor) {
     String probe = c.path("aiProbePath").asText();
     if (!probe.isBlank()) {
       AiChat.validatePath(c, "aiProbePath");
@@ -582,7 +583,40 @@ public class IntegrationService {
     return propose(config(id), id, action, actor);
   }
 
-  private ObjectNode propose(ObjectNode config, String id, ObjectNode action, String actor) {
+  /**
+   * Executor hook for write approvals bound to personal connections whose API
+   * routing differs from the stored base URL (e.g. Jira OAuth 3LO routes via
+   * api.atlassian.com/ex/jira/{cloudId}). Implementations re-check ownership,
+   * connection state and credential freshness before dispatching the stored
+   * action path/body.
+   */
+  public interface PersonalConnectionExecutor {
+    boolean supports(ObjectNode event, ObjectNode config);
+    JsonNode execute(ObjectNode event, ObjectNode config, String actor);
+  }
+
+  private List<PersonalConnectionExecutor> personalExecutors = List.of();
+  private org.springframework.beans.factory.ObjectProvider<PersonalConnectionExecutor> executorProvider;
+
+  // Resolved lazily: JiraService depends on this service, so eager injection
+  // would create a circular reference at startup.
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setExecutorProvider(
+      org.springframework.beans.factory.ObjectProvider<PersonalConnectionExecutor> provider) {
+    this.executorProvider = provider;
+  }
+
+  /** Test hook: register executors directly when services are wired by hand. */
+  public void setPersonalExecutors(List<PersonalConnectionExecutor> executors) {
+    this.personalExecutors = executors == null ? List.of() : executors;
+  }
+
+  private List<PersonalConnectionExecutor> personalExecutors() {
+    if (!personalExecutors.isEmpty()) return personalExecutors;
+    return executorProvider == null ? List.of() : executorProvider.orderedStream().toList();
+  }
+
+  public ObjectNode propose(ObjectNode config, String id, ObjectNode action, String actor) {
     String method = action.path("method").asText("POST");
     if (
       !Set.of("POST", "PUT", "PATCH", "DELETE").contains(method)
@@ -700,6 +734,9 @@ public class IntegrationService {
     ) throw new IllegalArgumentException("Explicit approval is required");
     var c = config(e.path("integrationId").asText());
     assertApprovalBinding(e, c);
+    for (var executor : personalExecutors()) {
+      if (executor.supports(e, c)) return executor.execute(e, c, actor);
+    }
     e.put("status", "EXECUTING");
     e = store.save("events", e, actor);
     try {

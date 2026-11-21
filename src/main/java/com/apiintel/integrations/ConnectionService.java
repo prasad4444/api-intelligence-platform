@@ -23,6 +23,9 @@ public class ConnectionService {
     "NOT_CONNECTED", "CONNECTED", "RECONNECT_REQUIRED", "ERROR"
   );
 
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private org.springframework.context.ApplicationEventPublisher publisher;
+
   private final RecordStore store;
   private final Vault vault;
   private final PlatformUserService users;
@@ -86,8 +89,19 @@ public class ConnectionService {
     }
     copyIfPresent(input, connection, "name", "baseUrl", "authType", "jiraEmail", "jiraDeployment",
       "headerName", "clientId", "tokenPath", "scope", "organizationId", "workspaceId", "model",
+      "tenant", "cloudId", "replayMode", "modelsBaseUrl", "authorizeUrl", "tokenUrl", "resourcesUrl", "apiBase",
+      "copilotStream", "pollIntervalMs", "maxPolls", "oauthApp",
       "chatPath", "aiChatEnabled", "aiMethod", "aiProbePath", "aiResponseFormat", "aiResponsePointer",
       "aiRequiresApproval", "testGenerationEnabled", "aiRequestTemplate");
+    if (input.has("steps") && input.path("steps").isArray()) {
+      connection.set("steps", input.path("steps").deepCopy());
+    }
+    if (input.has("captureIds") && input.path("captureIds").isArray()) {
+      connection.set("captureIds", input.path("captureIds").deepCopy());
+    }
+    if (input.hasNonNull("clientSecret")) {
+      input.put("pendingClientSecret", input.path("clientSecret").asText());
+    }
     if (input.has("aiHeaders") && input.path("aiHeaders").isObject()) {
       connection.set("aiHeaders", input.path("aiHeaders"));
     }
@@ -107,6 +121,12 @@ public class ConnectionService {
       vault.putScoped(ownerId, connection.path("id").asText(), "credential", credential);
       connection.put("secretRef", "scoped:credential");
       connection.put("hasCredential", true);
+      connection = store.save("connections", connection, username);
+    }
+    String clientSecret = input.path("pendingClientSecret").asText("");
+    if (!clientSecret.isBlank()) {
+      vault.putScoped(ownerId, connection.path("id").asText(), "client_secret", clientSecret);
+      connection.put("hasClientSecret", true);
       connection = store.save("connections", connection, username);
     }
     if (!connection.path("hasCredential").asBoolean() && !"NONE".equals(connection.path("authType").asText("NONE"))) {
@@ -174,6 +194,13 @@ public class ConnectionService {
     var connection = getOwned(id, username);
     vault.deleteConnection(connection.path("ownerId").asText(), connection.path("id").asText());
     invalidatePending(connection, username);
+    if (publisher != null) {
+      try {
+        publisher.publishEvent(new com.apiintel.studio.StudioService.ConnectionDisconnectedEvent(
+          connection.path("id").asText(), connection.path("ownerId").asText(), username));
+      } catch (RuntimeException ignored) {
+      }
+    }
     connection.put("state", "NOT_CONNECTED");
     connection.put("verifiedIdentity", "");
     connection.put("hasCredential", false);

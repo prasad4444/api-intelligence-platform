@@ -5,6 +5,7 @@ import { Badge, Field, Panel } from "./components";
 import { listOperations } from "./endpoint-model";
 import { supportsChat } from "./AiDraftReview";
 import { PersonalConnections } from "./PersonalConnections";
+import { ChatPanel } from "./Chat";
 import type { PageProps } from "./App";
 
 const providers = [
@@ -17,6 +18,7 @@ const providers = [
 export default function AiTools({ data, spec, roles, renderEditor, reload }: Pick<PageProps, "data" | "spec" | "roles" | "reload"> & {
   renderEditor: (connection: Row, onClose: () => void, onSaved: (saved: Row) => void) => ReactNode;
 }) {
+  const [mode, setMode] = useState<"chat" | "configure">("configure");
   const [active, setActive] = useState<string>(providers[0][0]);
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [editor, setEditor] = useState<Row>();
@@ -40,6 +42,14 @@ export default function AiTools({ data, spec, roles, renderEditor, reload }: Pic
     aiMethod: "POST", aiHeaders: {}, aiResponseFormat: "json",
   });
   return <section className="ai-tools" aria-label="AI Tools">
+    <div className="ai-provider-tabs" role="tablist" aria-label="AI workspace">
+      <button type="button" role="tab" aria-selected={mode === "chat"} onClick={() => setMode("chat")}>Chat</button>
+      <button type="button" role="tab" aria-selected={mode === "configure"} onClick={() => setMode("configure")}>Configure & test</button>
+    </div>
+    {mode === "chat" ? <>
+      <PersonalConnections connections={personal} providerFilter={tab.id} onChange={() => void reload?.(["connections"])} />
+      <ChatPanel spec={spec} />
+    </> : <>
     <PersonalConnections connections={personal} providerFilter={tab.id} onChange={() => void reload?.(["connections"])} />
     <Panel title="AI Tools" action={<Badge tone="purple">COMPANY + PERSONAL</Badge>}>
       <div className="ai-provider-tabs" role="tablist" aria-label="AI providers"
@@ -75,6 +85,7 @@ export default function AiTools({ data, spec, roles, renderEditor, reload }: Pic
     {editor && renderEditor(editor, () => setEditor(undefined), saved => {
       setSelected(old => ({ ...old, [String(saved.provider)]: saved.id }));
     })}
+    </>}
   </section>;
 }
 

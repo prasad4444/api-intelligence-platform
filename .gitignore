@@ -7,3 +7,5 @@ data/
 .env
 *.log
 *.tsbuildinfo
+frontend/.pw-browsers/
+frontend/.pw2/

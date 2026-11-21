@@ -21,6 +21,7 @@ import {
   ArrowUpRight,
   Command,
   RefreshCw,
+  MonitorSmartphone,
 } from "lucide-react";
 import { request, post, save, resetCsrf, pretty, type Row } from "./api";
 import { listOperations } from "./endpoint-model";
@@ -38,6 +39,7 @@ import {
   GitHubPage,
   Admin,
 } from "./pages";
+import { ConnectionStudio } from "./ConnectionStudio";
 const nav = [
   ["Dashboard", LayoutDashboard],
   ["API Workspace", Braces],
@@ -51,6 +53,7 @@ const nav = [
   ["AI Copilot", Sparkles],
   ["Dev Utilities", Wrench],
   ["Integration Hub", PlugZap],
+  ["Connection Studio", MonitorSmartphone],
   ["Admin", Settings],
 ] as const;
 const descriptions: Record<string, string> = {
@@ -67,6 +70,8 @@ const descriptions: Record<string, string> = {
   "Dev Utilities": "The small tools that keep engineering moving.",
   "Integration Hub":
     "One control plane for your tools, credentials and agents.",
+  "Connection Studio":
+    "Pair your own apps, record flows and activate chat connectors.",
   Admin: "Access policies, encrypted secrets and traceable changes.",
 };
 const pageKinds: Record<string, string[]> = {
@@ -80,6 +85,7 @@ const pageKinds: Record<string, string[]> = {
   Architecture: ["diagrams"],
   "AI Copilot": ["integrations", "ai-drafts", "runs", "connections"],
   "Integration Hub": ["integrations", "events", "connections"],
+  "Connection Studio": ["connections"],
   GitHub: ["integrations", "connections"],
   Admin: [],
 };
@@ -114,6 +120,14 @@ export default function App() {
       .catch(() => {})
       .finally(() => setChecking(false));
   }, []);
+  useEffect(() => {
+    // OAuth redirect lands on /#connection-studio?connected=<id>.
+    const match = window.location.hash.match(/^#connection-studio(?:\?connected=([0-9a-f-]+))?/i);
+    if (!match) return;
+    setPage("Connection Studio");
+    if (match[1]) setTimeout(() => setNotice("Connected successfully — finish setup in Connection Studio."), 0);
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }, [user]);
   useEffect(() => {
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
     const update = () => document.documentElement.classList.toggle("dark", theme === "dark" || theme === "system" && prefersDark.matches);
@@ -331,6 +345,8 @@ export default function App() {
             <Integrations {...props} />
           ) : page === "GitHub" ? (
             <GitHubPage {...props} />
+          ) : page === "Connection Studio" ? (
+            <ConnectionStudio {...props} />
           ) : (
             <Admin {...props} />
           )}
